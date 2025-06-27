@@ -1,0 +1,41 @@
+# Temporal Development Configuration
+# This file contains dynamic configuration for Temporal development environment
+
+# Enable development mode features
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: true
+    
+# Configure worker settings
+system.workerBuildIdScavengerEnabled:
+  - value: true
+
+# Configure retention settings for development
+system.defaultWorkflowRetentionTTL:
+  - value: "72h"  # 3 days for development
+
+# Enable advanced visibility features
+system.advancedVisibilityWritingMode:
+  - value: "on"
+
+# Configure maximum payload size
+limit.blobSize.error:
+  - value: "2MB"
+
+limit.blobSize.warn:
+  - value: "512KB"
+
+# Configure history settings
+system.historyMaxAutoResetPoints:
+  - value: 20
+
+# Development-friendly settings
+system.enableAuthorization:
+  - value: false
+
+# Configure namespace settings
+system.maxBadBinaries:
+  - value: 10
+
+# Enable task forwarding
+system.enableTaskForwarding:
+  - value: true 

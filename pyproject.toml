@@ -1,0 +1,30 @@
+[project]
+name = "obelisk"
+version = "0.1.0"
+description = "FastAPI server with OpenRouter integration"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
+    "pydantic",
+    "rich",
+    "click",
+    "aiosqlite",
+    "temporalio>=1.13.0",
+    "python-dotenv>=1.1.1",
+    "asyncio-mqtt>=0.16.2",
+    "prometheus-client>=0.22.1",
+    "docker>=7.1.0",
+    "psutil>=7.0.0",
+    "structlog>=25.4.0",
+]
+
+[dependency-groups]
+dev = [
+    "coverage>=7.9.1",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
+    "pytest-mock>=3.14.1",
+]
