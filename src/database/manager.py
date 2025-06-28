@@ -1,146 +1,273 @@
 """
-Database manager for Obelisk Temporal Integration
-Enhanced database operations with better error handling and model integration.
+Database manager for chat sessions and messages with optimized JSON structure
 """
-
-import uuid
 import aiosqlite
+import json
 import logging
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Optional, List, Dict, Any
+from uuid import uuid4
 from contextlib import asynccontextmanager
+from collections import OrderedDict
 
-from src.models.chat import (
-    ChatSession, ChatMessage, ChatSessionCreate, ChatMessageCreate,
-    MessageRole, SessionStatus, ChatContext
-)
 from src.config.settings import settings
+from src.models.chat import ChatSession, ChatMessage, ChatSessionCreate, ChatMessageCreate, MessageRole, SessionStatus
 
 logger = logging.getLogger(__name__)
 
-
-class DatabaseError(Exception):
-    """Base exception for database operations"""
-    pass
-
-
-class SessionNotFoundError(DatabaseError):
-    """Raised when a session is not found"""
-    pass
-
-
 class DatabaseManager:
-    """Enhanced database manager with model integration and better error handling"""
+    """Database manager with optimized conversation_turns JSON structure"""
     
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or settings.database.url.replace("sqlite:///", "")
         
-    async def init_database(self) -> None:
-        """Initialize the database with required tables and indexes"""
-        try:
-            async with aiosqlite.connect(self.db_path) as db:
-                # Enable foreign key constraints
-                await db.execute("PRAGMA foreign_keys = ON")
-                
-                # Create sessions table with enhanced fields
-                await db.execute("""
-                    CREATE TABLE IF NOT EXISTS sessions (
-                        id TEXT PRIMARY KEY,
-                        name TEXT,
-                        status TEXT DEFAULT 'active',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        metadata TEXT DEFAULT '{}',
-                        message_count INTEGER DEFAULT 0
-                    )
-                """)
-                
-                # Create messages table with enhanced fields
-                await db.execute("""
-                    CREATE TABLE IF NOT EXISTS messages (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        session_id TEXT NOT NULL,
-                        role TEXT NOT NULL,
-                        content TEXT NOT NULL,
-                        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        metadata TEXT DEFAULT '{}',
-                        FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
-                    )
-                """)
-                
-                # Create indexes for performance
-                await db.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_messages_session_timestamp 
-                    ON messages (session_id, timestamp DESC)
-                """)
-                
-                await db.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_sessions_status 
-                    ON sessions (status)
-                """)
-                
-                await db.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_sessions_updated 
-                    ON sessions (updated_at DESC)
-                """)
-                
-                await db.commit()
-                logger.info("Database initialized successfully")
-                
-        except Exception as e:
-            logger.error(f"Failed to initialize database: {e}")
-            raise DatabaseError(f"Database initialization failed: {e}")
-    
+    async def initialize(self):
+        """Initialize database with updated schema"""
+        async with aiosqlite.connect(self.db_path) as db:
+            # Enable foreign keys
+            await db.execute("PRAGMA foreign_keys = ON")
+            
+            # Create sessions table with optimized structure
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    name TEXT,
+                    status TEXT DEFAULT 'active' CHECK(status IN ('active', 'inactive', 'archived')),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    session_metadata JSON DEFAULT '{}',
+                    conversation_history JSON DEFAULT '{"conversation_turns": []}'
+                )
+            """)
+            
+            # Keep individual messages table for quick lookups and compatibility
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    message_id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    turn_id TEXT,
+                    role TEXT CHECK(role IN ('user', 'assistant', 'system')),
+                    content TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    metadata JSON DEFAULT '{}',
+                    is_active BOOLEAN DEFAULT TRUE,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+                )
+            """)
+            
+            await db.commit()
+            logger.info("Database initialized with optimized schema")
+
     @asynccontextmanager
     async def get_connection(self):
-        """Context manager for database connections"""
+        """Get database connection with proper error handling"""
+        conn = None
         try:
-            async with aiosqlite.connect(self.db_path) as db:
-                # Enable foreign key constraints and row factory
-                await db.execute("PRAGMA foreign_keys = ON")
-                db.row_factory = aiosqlite.Row
-                yield db
+            conn = await aiosqlite.connect(self.db_path)
+            conn.row_factory = aiosqlite.Row
+            await conn.execute("PRAGMA foreign_keys = ON")
+            yield conn
         except Exception as e:
-            logger.error(f"Database connection failed: {e}")
-            raise DatabaseError(f"Database connection failed: {e}")
-    
-    async def create_session(self, session_data: Optional[ChatSessionCreate] = None) -> ChatSession:
-        """Create a new chat session and return the session object"""
-        session_id = str(uuid.uuid4())
-        name = session_data.name if session_data else None
-        metadata = session_data.metadata if session_data else {}
+            if conn:
+                await conn.rollback()
+            logger.error(f"Database error: {e}")
+            raise
+        finally:
+            if conn:
+                await conn.close()
+
+    async def create_session(self, session_data: ChatSessionCreate) -> ChatSession:
+        """Create a new chat session with optimized structure"""
+        session_id = str(uuid4())
         
         try:
             async with self.get_connection() as db:
-                await db.execute(
-                    """INSERT INTO sessions (id, name, metadata) VALUES (?, ?, ?)""",
-                    (session_id, name, str(metadata))
-                )
-                await db.commit()
-                
-            logger.info(f"Created new session: {session_id}")
-            
-            return ChatSession(
-                id=session_id,
-                name=name,
-                metadata=metadata,
-                status=SessionStatus.ACTIVE,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
-                message_count=0
-            )
-            
+                await db.execute("BEGIN")
+                try:
+                    # Initialize session metadata
+                    session_metadata = {
+                        "total_messages": 0,
+                        "total_turns": 0,
+                        "model": "deepseek/deepseek-chat-v3-0324:free",
+                        "settings": {
+                            "temperature": 0.7,
+                            "max_tokens": 1000,
+                            "streaming": True
+                        },
+                        "statistics": {
+                            "total_tokens_input": 0,
+                            "total_tokens_output": 0,
+                            "total_response_time_ms": 0,
+                            "average_response_time_ms": 0
+                        },
+                        "features_used": ["chat"],
+                        "user_preferences": {
+                            "streaming": True,
+                            "show_tool_calls": True
+                        }
+                    }
+                    
+                    # Initialize conversation history
+                    conversation_history = {
+                        "conversation_turns": []
+                    }
+                    
+                    now = datetime.utcnow().isoformat()
+                    await db.execute(
+                        """INSERT INTO sessions 
+                           (session_id, name, status, created_at, updated_at, session_metadata, conversation_history)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            session_id,
+                            session_data.name or f"Chat Session {session_id[:8]}",
+                            "active",  # Default status since ChatSessionCreate doesn't have status
+                            now,
+                            now,
+                            json.dumps(session_metadata),
+                            json.dumps(conversation_history)
+                        )
+                    )
+                    
+                    await db.commit()
+                    logger.info(f"Created session {session_id}")
+                    
+                    return ChatSession(
+                        id=session_id,
+                        name=session_data.name or f"Chat Session {session_id[:8]}",
+                        status=SessionStatus.ACTIVE,
+                        created_at=datetime.fromisoformat(now.replace('Z', '+00:00')),
+                        updated_at=datetime.fromisoformat(now.replace('Z', '+00:00')),
+                        metadata=session_metadata,
+                        message_count=0
+                    )
+                    
+                except Exception:
+                    await db.rollback()
+                    raise
+                    
         except Exception as e:
             logger.error(f"Failed to create session: {e}")
-            raise DatabaseError(f"Session creation failed: {e}")
-    
+            raise
+
+    async def add_conversation_turn(self, session_id: str, turn_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Add a complete conversation turn (user message + assistant response) atomically"""
+        try:
+            async with self.get_connection() as db:
+                await db.execute("BEGIN")
+                try:
+                    # Get current conversation
+                    cursor = await db.execute(
+                        "SELECT conversation_history, session_metadata FROM sessions WHERE session_id = ?",
+                        (session_id,)
+                    )
+                    row = await cursor.fetchone()
+                    
+                    if not row:
+                        raise ValueError(f"Session {session_id} not found")
+                    
+                    # Parse current data
+                    conversation = json.loads(row['conversation_history'])
+                    metadata = json.loads(row['session_metadata'])
+                    
+                    # Set correct turn number and ensure proper field ordering
+                    turn_number = len(conversation['conversation_turns']) + 1
+                    
+                    # Use OrderedDict for absolute field ordering control
+                    ordered_turn = OrderedDict()
+                    ordered_turn["turn_id"] = turn_data['turn_id']
+                    ordered_turn["turn_number"] = turn_number
+                    
+                    # User message first (logical conversation flow)
+                    user_msg = turn_data['user_message']
+                    ordered_turn["user_message"] = OrderedDict()
+                    ordered_turn["user_message"]["message_id"] = user_msg['message_id']
+                    ordered_turn["user_message"]["content"] = user_msg['content']
+                    ordered_turn["user_message"]["timestamp"] = user_msg['timestamp']
+                    ordered_turn["user_message"]["metadata"] = user_msg.get('metadata', {})
+                    
+                    # Assistant responses second
+                    ordered_turn["assistant_responses"] = []
+                    for resp in turn_data['assistant_responses']:
+                        ordered_resp = OrderedDict()
+                        ordered_resp["response_id"] = resp['response_id']
+                        ordered_resp["message_id"] = resp['message_id'] 
+                        ordered_resp["content"] = resp['content']
+                        ordered_resp["final_content"] = resp.get('final_content', resp['content'])
+                        ordered_resp["timestamp"] = resp['timestamp']
+                        ordered_resp["is_active"] = resp.get('is_active', True)
+                        ordered_resp["tool_calls"] = resp.get('tool_calls', [])
+                        ordered_resp["mcp_calls"] = resp.get('mcp_calls', [])
+                        ordered_resp["metadata"] = resp.get('metadata', {})
+                        ordered_turn["assistant_responses"].append(ordered_resp)
+                    
+                    # Add new turn with proper ordering
+                    conversation['conversation_turns'].append(ordered_turn)
+                    
+                    # Update metadata statistics
+                    metadata['total_turns'] = len(conversation['conversation_turns'])
+                    metadata['total_messages'] = sum(
+                        1 + len(turn.get('assistant_responses', [])) 
+                        for turn in conversation['conversation_turns']
+                    )
+                    metadata['last_updated'] = datetime.utcnow().isoformat()
+                    
+                    # Update session (JSON-only storage with preserved ordering)
+                    await db.execute(
+                        """UPDATE sessions 
+                           SET conversation_history = ?, session_metadata = ?, updated_at = ?
+                           WHERE session_id = ?""",
+                        (
+                            json.dumps(conversation, sort_keys=False),
+                            json.dumps(metadata, sort_keys=False),
+                            datetime.utcnow().isoformat(),
+                            session_id
+                        )
+                    )
+                    
+                    await db.commit()
+                    logger.info(f"Added conversation turn to session {session_id}")
+                    return turn_data
+                    
+                except Exception:
+                    await db.rollback()
+                    raise
+                    
+        except Exception as e:
+            logger.error(f"Failed to add conversation turn: {e}")
+            raise
+
+    # Legacy compatibility method removed - using pure JSON storage only
+    # async def _store_individual_messages(self, db, session_id: str, turn_data: Dict[str, Any]):
+    #     """Store individual messages for quick lookups - DISABLED for pure JSON approach"""
+    #     pass
+
+    async def get_conversation_history(self, session_id: str) -> Dict[str, Any]:
+        """Get full conversation history for a session"""
+        try:
+            async with self.get_connection() as db:
+                cursor = await db.execute(
+                    "SELECT conversation_history FROM sessions WHERE session_id = ?",
+                    (session_id,)
+                )
+                row = await cursor.fetchone()
+                
+                if not row:
+                    return {"conversation_turns": []}
+                
+                return json.loads(row['conversation_history'])
+                
+        except Exception as e:
+            logger.error(f"Failed to get conversation history: {e}")
+            raise
+
     async def get_session(self, session_id: str) -> Optional[ChatSession]:
         """Get session information by ID"""
         try:
             async with self.get_connection() as db:
                 cursor = await db.execute(
-                    """SELECT id, name, status, created_at, updated_at, metadata, message_count 
-                       FROM sessions WHERE id = ?""",
+                    """SELECT session_id, name, status, created_at, updated_at, 
+                              session_metadata, conversation_history 
+                       FROM sessions WHERE session_id = ?""",
                     (session_id,)
                 )
                 row = await cursor.fetchone()
@@ -156,7 +283,6 @@ class DatabaseManager:
                     try:
                         created_at = datetime.fromisoformat(row['created_at'].replace('Z', '+00:00'))
                     except (ValueError, AttributeError):
-                        # Fallback to current time if parsing fails
                         created_at = datetime.utcnow()
                 
                 if row['updated_at']:
@@ -165,201 +291,36 @@ class DatabaseManager:
                     except (ValueError, AttributeError):
                         updated_at = datetime.utcnow()
                 
+                # Parse metadata and get message count
+                metadata = json.loads(row['session_metadata']) if row['session_metadata'] else {}
+                conversation = json.loads(row['conversation_history']) if row['conversation_history'] else {"conversation_turns": []}
+                message_count = metadata.get('total_messages', 0)
+                
                 return ChatSession(
-                    id=row['id'],
+                    id=row['session_id'],
                     name=row['name'],
                     status=SessionStatus(row['status']),
                     created_at=created_at,
                     updated_at=updated_at,
-                    metadata=eval(row['metadata']) if row['metadata'] else {},
-                    message_count=row['message_count']
+                    metadata=metadata,
+                    message_count=message_count
                 )
                 
         except Exception as e:
-            logger.error(f"Failed to get session {session_id}: {e}")
-            raise DatabaseError(f"Failed to retrieve session: {e}")
-    
-    async def session_exists(self, session_id: str) -> bool:
-        """Check if a session exists"""
-        try:
-            async with self.get_connection() as db:
-                cursor = await db.execute(
-                    "SELECT 1 FROM sessions WHERE id = ? LIMIT 1",
-                    (session_id,)
-                )
-                result = await cursor.fetchone()
-                return result is not None
-                
-        except Exception as e:
-            logger.error(f"Failed to check session existence {session_id}: {e}")
-            return False
-    
-    async def add_message(self, session_id: str, message_data: ChatMessageCreate) -> ChatMessage:
-        """Add a message to a session and update session timestamp"""
-        try:
-            async with self.get_connection() as db:
-                # Verify session exists
-                if not await self.session_exists(session_id):
-                    raise SessionNotFoundError(f"Session {session_id} not found")
-                
-                # Insert message
-                # Handle both string and enum role values
-                role_str = message_data.role.value if hasattr(message_data.role, 'value') else str(message_data.role)
-                cursor = await db.execute(
-                    """INSERT INTO messages (session_id, role, content, metadata) 
-                       VALUES (?, ?, ?, ?)""",
-                    (session_id, role_str, message_data.content, str(message_data.metadata))
-                )
-                message_id_raw = cursor.lastrowid
-                if message_id_raw is None:
-                    raise DatabaseError("Failed to get message ID after insertion")
-                message_id = int(message_id_raw)
-                
-                # Update session timestamp and message count
-                await db.execute(
-                    """UPDATE sessions 
-                       SET updated_at = CURRENT_TIMESTAMP, message_count = message_count + 1 
-                       WHERE id = ?""",
-                    (session_id,)
-                )
-                
-                await db.commit()
-                
-                message = ChatMessage(
-                    id=message_id,
-                    session_id=session_id,
-                    role=message_data.role,
-                    content=message_data.content,
-                    metadata=message_data.metadata,
-                    timestamp=datetime.utcnow()
-                )
-                
-                logger.debug(f"Added message to session {session_id}: {role_str}")
-                return message
-                
-        except SessionNotFoundError:
-            raise  
-        except Exception as e:
-            logger.error(f"Failed to add message to session {session_id}: {e}")
-            raise DatabaseError(f"Failed to add message: {e}")
-    
-    async def get_session_context(self, session_id: str, limit: int | None = None) -> ChatContext:
-        """Get recent messages from a session for context"""
-        if limit is None:
-            limit = settings.chat.max_context_messages
-            
-        try:
-            async with self.get_connection() as db:
-                # Get total message count
-                cursor = await db.execute(
-                    "SELECT message_count FROM sessions WHERE id = ?",
-                    (session_id,)
-                )
-                row = await cursor.fetchone()
-                if not row:
-                    raise SessionNotFoundError(f"Session {session_id} not found")
-                
-                total_messages = row['message_count']
-                
-                # Get recent messages
-                cursor = await db.execute("""
-                    SELECT id, role, content, timestamp, metadata FROM messages 
-                    WHERE session_id = ? 
-                    ORDER BY timestamp DESC 
-                    LIMIT ?
-                """, (session_id, limit))
-                
-                rows = await cursor.fetchall()
-                
-                # Reverse to get chronological order (oldest first)
-                messages = []
-                for row in reversed(list(rows)):
-                    # Safe timestamp parsing
-                    timestamp = None
-                    if row['timestamp']:
-                        try:
-                            timestamp = datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00'))
-                        except (ValueError, AttributeError):
-                            timestamp = datetime.utcnow()
-                    
-                    messages.append(ChatMessage(
-                        id=row['id'],
-                        session_id=session_id,
-                        role=MessageRole(row['role']),
-                        content=row['content'],
-                        timestamp=timestamp,
-                        metadata=eval(row['metadata']) if row['metadata'] else {}
-                    ))
-                
-                return ChatContext(
-                    session_id=session_id,
-                    messages=messages,
-                    total_messages=total_messages,
-                    context_window=limit
-                )
-                
-        except SessionNotFoundError:
+            logger.error(f"Failed to get session: {e}")
             raise
-        except Exception as e:
-            logger.error(f"Failed to get session context {session_id}: {e}")
-            raise DatabaseError(f"Failed to retrieve session context: {e}")
-    
-    async def get_session_history(self, session_id: str, offset: int = 0, limit: int = 50) -> List[ChatMessage]:
-        """Get paginated session history"""
+
+    async def list_sessions(self, limit: int = 50, offset: int = 0) -> List[ChatSession]:
+        """List sessions with pagination"""
         try:
             async with self.get_connection() as db:
-                cursor = await db.execute("""
-                    SELECT id, role, content, timestamp, metadata FROM messages 
-                    WHERE session_id = ? 
-                    ORDER BY timestamp ASC 
-                    LIMIT ? OFFSET ?
-                """, (session_id, limit, offset))
-                
-                messages = []
-                async for row in cursor:
-                    # Safe timestamp parsing
-                    timestamp = None
-                    if row['timestamp']:
-                        try:
-                            timestamp = datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00'))
-                        except (ValueError, AttributeError):
-                            timestamp = datetime.utcnow()
-                    
-                    messages.append(ChatMessage(
-                        id=row['id'],
-                        session_id=session_id,
-                        role=MessageRole(row['role']),
-                        content=row['content'],
-                        timestamp=timestamp,
-                        metadata=eval(row['metadata']) if row['metadata'] else {}
-                    ))
-                
-                return messages
-                
-        except Exception as e:
-            logger.error(f"Failed to get session history {session_id}: {e}")
-            raise DatabaseError(f"Failed to retrieve session history: {e}")
-    
-    async def list_sessions(self, status: Optional[SessionStatus] = None, 
-                          offset: int = 0, limit: int = 50) -> List[ChatSession]:
-        """List sessions with optional status filter"""
-        try:
-            async with self.get_connection() as db:
-                if status:
-                    cursor = await db.execute("""
-                        SELECT id, name, status, created_at, updated_at, metadata, message_count 
-                        FROM sessions 
-                        WHERE status = ?
-                        ORDER BY updated_at DESC 
-                        LIMIT ? OFFSET ?
-                    """, (status.value, limit, offset))
-                else:
-                    cursor = await db.execute("""
-                        SELECT id, name, status, created_at, updated_at, metadata, message_count 
-                        FROM sessions 
-                        ORDER BY updated_at DESC 
-                        LIMIT ? OFFSET ?
-                    """, (limit, offset))
+                cursor = await db.execute(
+                    """SELECT session_id, name, status, created_at, updated_at, session_metadata
+                       FROM sessions 
+                       ORDER BY updated_at DESC 
+                       LIMIT ? OFFSET ?""",
+                    (limit, offset)
+                )
                 
                 sessions = []
                 async for row in cursor:
@@ -379,57 +340,74 @@ class DatabaseManager:
                         except (ValueError, AttributeError):
                             updated_at = datetime.utcnow()
                     
+                    metadata = json.loads(row['session_metadata']) if row['session_metadata'] else {}
+                    
                     sessions.append(ChatSession(
-                        id=row['id'],
+                        id=row['session_id'],
                         name=row['name'],
                         status=SessionStatus(row['status']),
                         created_at=created_at,
                         updated_at=updated_at,
-                        metadata=eval(row['metadata']) if row['metadata'] else {},
-                        message_count=row['message_count']
+                        metadata=metadata,
+                        message_count=metadata.get('total_messages', 0)
                     ))
                 
                 return sessions
                 
         except Exception as e:
             logger.error(f"Failed to list sessions: {e}")
-            raise DatabaseError(f"Failed to list sessions: {e}")
-    
-    async def update_session_status(self, session_id: str, status: SessionStatus) -> bool:
-        """Update session status"""
-        try:
-            async with self.get_connection() as db:
-                cursor = await db.execute(
-                    """UPDATE sessions 
-                       SET status = ?, updated_at = CURRENT_TIMESTAMP 
-                       WHERE id = ?""",
-                    (status.value, session_id)
-                )
-                await db.commit()
-                
-                return cursor.rowcount > 0
-                
-        except Exception as e:
-            logger.error(f"Failed to update session status {session_id}: {e}")
-            raise DatabaseError(f"Failed to update session status: {e}")
-    
-    async def delete_session(self, session_id: str) -> bool:
-        """Delete a session and all its messages"""
-        try:
-            async with self.get_connection() as db:
-                cursor = await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-                await db.commit()
-                
-                deleted = cursor.rowcount > 0
-                if deleted:
-                    logger.info(f"Deleted session: {session_id}")
-                
-                return deleted
-                
-        except Exception as e:
-            logger.error(f"Failed to delete session {session_id}: {e}")
-            raise DatabaseError(f"Failed to delete session: {e}")
+            raise
 
+    # Legacy compatibility method - DISABLED for pure JSON conversation_turns approach
+    async def add_message(self, session_id: str, message_data: ChatMessageCreate) -> ChatMessage:
+        """
+        Legacy method - DISABLED. 
+        Use add_conversation_turn() for complete conversation turns in pure JSON storage.
+        """
+        raise NotImplementedError(
+            "Legacy add_message() disabled. Use add_conversation_turn() for complete conversation turns."
+        )
 
-# Global database manager instance
+    async def get_session_context(self, session_id: str, limit: int = 10) -> Dict[str, Any]:
+        """Get recent conversation context for AI processing"""
+        try:
+            conversation = await self.get_conversation_history(session_id)
+            turns = conversation.get('conversation_turns', [])
+            
+            # Get last N turns
+            recent_turns = turns[-limit:] if len(turns) > limit else turns
+            
+            # Format for AI context
+            context_messages = []
+            for turn in recent_turns:
+                # Add user message
+                user_msg = turn['user_message']
+                context_messages.append({
+                    "role": "user",
+                    "content": user_msg['content'],
+                    "message_id": user_msg['message_id']
+                })
+                
+                # Add active assistant response
+                for response in turn.get('assistant_responses', []):
+                    if response.get('is_active', True):
+                        context_messages.append({
+                            "role": "assistant", 
+                            "content": response.get('final_content', response.get('content', '')),
+                            "message_id": response['message_id']
+                        })
+                        break  # Only one active response per turn
+            
+            return {
+                "session_id": session_id,
+                "messages": context_messages,
+                "total_turns": len(turns),
+                "context_turns": len(recent_turns)
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get session context: {e}")
+            raise
+
+# Global instance
 db_manager = DatabaseManager() 

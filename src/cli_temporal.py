@@ -51,7 +51,30 @@ class TemporalChatClient:
     async def show_session_history(self, session_id: str):
         """Display session history"""
         try:
-            messages = await db_manager.get_session_history(session_id, offset=0, limit=50)
+            # Get conversation history from optimized structure
+            conversation = await db_manager.get_conversation_history(session_id)
+            turns = conversation.get("conversation_turns", [])
+            
+            # Flatten turns into message list for display
+            messages = []
+            for turn in turns:
+                # Add user message
+                user_msg = turn["user_message"]
+                messages.append({
+                    "role": "user",
+                    "content": user_msg["content"],
+                    "timestamp": user_msg["timestamp"]
+                })
+                
+                # Add active assistant response
+                for response in turn.get("assistant_responses", []):
+                    if response.get("is_active", True):
+                        messages.append({
+                            "role": "assistant",
+                            "content": response.get("final_content", response.get("content", "")),
+                            "timestamp": response["timestamp"]
+                        })
+                        break
             
             if not messages:
                 console.print("No messages in this session yet.", style="yellow")
@@ -61,23 +84,30 @@ class TemporalChatClient:
             console.print("="*60)
             
             for msg in messages:
-                # Handle potentially None timestamp
-                if msg.timestamp:
-                    timestamp = msg.timestamp.strftime("%H:%M:%S")
-                else:
+                # Handle timestamp parsing 
+                try:
+                    if msg["timestamp"]:
+                        from datetime import datetime
+                        if isinstance(msg["timestamp"], str):
+                            timestamp = datetime.fromisoformat(msg["timestamp"].replace('Z', '+00:00')).strftime("%H:%M:%S")
+                        else:
+                            timestamp = msg["timestamp"].strftime("%H:%M:%S")
+                    else:
+                        timestamp = "N/A"
+                except:
                     timestamp = "N/A"
                     
-                role_color = "blue" if msg.role.value == "user" else "green"
-                role_emoji = "👤" if msg.role.value == "user" else "🤖"
+                role_color = "blue" if msg["role"] == "user" else "green"
+                role_emoji = "👤" if msg["role"] == "user" else "🤖"
                 
-                header = f"{role_emoji} {msg.role.value.upper()} [{timestamp}]"
+                header = f"{role_emoji} {msg['role'].upper()} [{timestamp}]"
                 console.print(f"\n{header}", style=f"bold {role_color}")
                 
                 # Display content with proper formatting
-                if msg.role.value == "assistant":
-                    console.print(Markdown(msg.content))
+                if msg["role"] == "assistant":
+                    console.print(Markdown(msg["content"]))
                 else:
-                    console.print(msg.content, style="white")
+                    console.print(msg["content"], style="white")
                     
         except Exception as e:
             console.print(f"❌ Error fetching history: {e}", style="red")
@@ -198,8 +228,8 @@ def main(server_url, session, new_session, show_history, message, no_streaming, 
             # Connect to Temporal
             await client.connect()
             
-            # Initialize database
-            await db_manager.init_database()
+            # Initialize database with new schema
+            await db_manager.initialize()
             
             # Handle session
             session_id = session
