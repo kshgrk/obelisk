@@ -54,7 +54,7 @@ class DatabaseManager:
         
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "INSERT INTO sessions (id) VALUES (?)",
+                "INSERT INTO sessions (session_id) VALUES (?)",
                 (session_id,)
             )
             await db.commit()
@@ -95,7 +95,7 @@ class DatabaseManager:
             
             # Update session timestamp
             await db.execute(
-                "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                "UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
                 (session_id,)
             )
             
@@ -105,7 +105,7 @@ class DatabaseManager:
         """Check if a session exists"""
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "SELECT 1 FROM sessions WHERE id = ? LIMIT 1",
+                "SELECT 1 FROM sessions WHERE session_id = ? LIMIT 1",
                 (session_id,)
             )
             result = await cursor.fetchone()
@@ -116,7 +116,7 @@ class DatabaseManager:
         async with aiosqlite.connect(self.db_path) as db:
             # Get session info
             session_cursor = await db.execute(
-                "SELECT id, created_at, updated_at FROM sessions WHERE id = ?",
+                "SELECT session_id, created_at, updated_at FROM sessions WHERE session_id = ?",
                 (session_id,)
             )
             session_data = await session_cursor.fetchone()

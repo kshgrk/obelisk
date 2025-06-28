@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Obelisk Chat</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/styles.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1 class="app-title">Obelisk Chat</h1>
+                <button class="new-session-btn" title="Create New Session">
+                    <span>+</span> New Chat
+                </button>
+            </div>
+            
+            <div class="sidebar-content">
+                <!-- Session Search -->
+                <div class="session-search-container">
+                    <input type="text" class="session-search" placeholder="Search sessions...">
+                </div>
+                
+                <!-- Session Controls -->
+                <div class="session-controls">
+                    <button class="refresh-sessions-btn" title="Refresh Sessions">
+                        <span>↻</span> Refresh
+                    </button>
+                </div>
+                
+                <!-- Session List -->
+                <div class="session-list">
+                    <!-- Sessions will be populated by JavaScript -->
+                    <div class="loading">Loading sessions...</div>
+                </div>
+                
+                <!-- Pagination -->
+                <div class="pagination">
+                    <!-- Pagination controls will be populated by JavaScript -->
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Chat Header -->
+            <header class="chat-header">
+                <div class="session-info-container">
+                    <h2 class="session-title-header">Select a session</h2>
+                    <div class="session-info">
+                        <span>Choose a session from the sidebar to start chatting</span>
+                    </div>
+                </div>
+                
+                <div class="chat-actions">
+                    <button class="action-btn" title="Session Settings">
+                        <span>⚙️</span>
+                    </button>
+                    <button class="action-btn" title="Export Chat">
+                        <span>📥</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Chat Messages -->
+            <div class="chat-container">
+                <div class="chat-messages">
+                    <!-- Welcome message when no session is selected -->
+                    <div class="welcome-message">
+                        <div class="welcome-content">
+                            <h3>Welcome to Obelisk Chat</h3>
+                            <p>Select an existing session from the sidebar or create a new one to start chatting.</p>
+                            <div class="welcome-actions">
+                                <button class="new-session-btn primary">Start New Chat</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Input -->
+            <footer class="chat-input-container">
+                <form class="chat-form" id="chatForm">
+                    <div class="input-wrapper">
+                        <textarea 
+                            class="chat-input" 
+                            id="messageInput"
+                            placeholder="Type your message here..."
+                            rows="1"
+                            disabled
+                        ></textarea>
+                        <div class="input-actions">
+                            <button type="button" class="attach-btn" title="Attach File" disabled>
+                                <span>📎</span>
+                            </button>
+                            <button type="submit" class="send-btn" title="Send Message" disabled>
+                                <span>➤</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="input-hint">
+                        Press Shift+Enter for new line, Enter to send
+                    </div>
+                </form>
+            </footer>
+        </main>
+    </div>
+
+    <!-- Error notifications will be appended here by JavaScript -->
+    
+    <script src="{{ url_for('static', path='/js/parsers.js') }}"></script>
+    <script src="{{ url_for('static', path='/js/conversation-parser.js') }}"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+        // Debug script to check if marked loaded properly
+        document.addEventListener('DOMContentLoaded', function() {
+            if (typeof marked === 'undefined') {
+                console.error('Marked library failed to load from CDN, attempting fallback...');
+                // Try to load from alternative CDN
+                const script = document.createElement('script');
+                script.src = 'https://unpkg.com/marked/marked.min.js';
+                script.onload = function() {
+                    console.log('Marked library loaded from fallback CDN');
+                };
+                script.onerror = function() {
+                    console.error('All CDN sources for marked library failed');
+                };
+                document.head.appendChild(script);
+            } else {
+                console.log('Marked library loaded successfully, version:', marked.version || 'unknown');
+            }
+        });
+    </script>
+    <script src="{{ url_for('static', path='/js/main.js') }}"></script>
+    <script>
+        // Additional inline JavaScript for form handling
+        document.addEventListener('DOMContentLoaded', function() {
+            const chatForm = document.getElementById('chatForm');
+            const messageInput = document.getElementById('messageInput');
+            const sendBtn = document.querySelector('.send-btn');
+            
+            // Enable input when a session is loaded
+            function enableChatInput() {
+                messageInput.disabled = false;
+                sendBtn.disabled = false;
+                document.querySelector('.attach-btn').disabled = false;
+                messageInput.placeholder = "Type your message here...";
+            }
+            
+            // Disable input when no session is selected
+            function disableChatInput() {
+                messageInput.disabled = true;
+                sendBtn.disabled = true;
+                document.querySelector('.attach-btn').disabled = true;
+                messageInput.placeholder = "Select a session to start chatting...";
+            }
+            
+            // Auto-resize textarea
+            messageInput.addEventListener('input', function() {
+                this.style.height = 'auto';
+                this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+            });
+            
+            // Handle Enter key (send message) vs Shift+Enter (new line)
+            messageInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (!this.disabled && this.value.trim()) {
+                        chatForm.dispatchEvent(new Event('submit'));
+                    }
+                }
+            });
+            
+            // Handle form submission
+            chatForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const message = messageInput.value.trim();
+                if (!message || !currentSessionId) return;
+                
+                // Add message to chat (optimistic update)
+                addMessageToChat('user', message);
+                
+                // Clear input
+                messageInput.value = '';
+                messageInput.style.height = 'auto';
+                
+                // Send message to backend
+                sendMessage(message);
+            });
+            
+            // Global function to enable/disable chat input
+            window.enableChatInput = enableChatInput;
+            window.disableChatInput = disableChatInput;
+            
+            // Override the loadSession function to enable input when session loads
+            const originalLoadSession = window.loadSession;
+            window.loadSession = function(sessionId) {
+                return originalLoadSession(sessionId).then(() => {
+                    enableChatInput();
+                    hideWelcomeMessage();
+                });
+            };
+            
+            function hideWelcomeMessage() {
+                const welcomeMessage = document.querySelector('.welcome-message');
+                if (welcomeMessage) {
+                    welcomeMessage.style.display = 'none';
+                }
+            }
+            
+            function addMessageToChat(role, content) {
+                const chatMessages = document.querySelector('.chat-messages');
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${role}-message`;
+                
+                messageDiv.innerHTML = `
+                    <div class="message-content">${formatMessageContent(content, role)}</div>
+                    <div class="message-time">now</div>
+                `;
+                
+                chatMessages.appendChild(messageDiv);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+            
+            async function sendMessage(message) {
+                try {
+                    // This would connect to your chat API endpoint
+                    const response = await fetch('/api/chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            session_id: currentSessionId,
+                            message: message
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    
+                    const result = await response.json();
+                    
+                    // Add assistant response to chat
+                    if (result.content) {
+                        addMessageToChat('assistant', result.content);
+                    }
+                    
+                    // Refresh session to update message count
+                    await loadSession(currentSessionId);
+                    
+                } catch (error) {
+                    console.error('Error sending message:', error);
+                    addMessageToChat('system', 'Error: Failed to send message. Please try again.');
+                }
+            }
+        });
+    </script>
+</body>
+</html> 
