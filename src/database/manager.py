@@ -148,12 +148,29 @@ class DatabaseManager:
                 if not row:
                     return None
                 
+                # Safe datetime parsing
+                created_at = None
+                updated_at = None
+                
+                if row['created_at']:
+                    try:
+                        created_at = datetime.fromisoformat(row['created_at'].replace('Z', '+00:00'))
+                    except (ValueError, AttributeError):
+                        # Fallback to current time if parsing fails
+                        created_at = datetime.utcnow()
+                
+                if row['updated_at']:
+                    try:
+                        updated_at = datetime.fromisoformat(row['updated_at'].replace('Z', '+00:00'))
+                    except (ValueError, AttributeError):
+                        updated_at = datetime.utcnow()
+                
                 return ChatSession(
                     id=row['id'],
                     name=row['name'],
                     status=SessionStatus(row['status']),
-                    created_at=datetime.fromisoformat(row['created_at']),
-                    updated_at=datetime.fromisoformat(row['updated_at']),
+                    created_at=created_at,
+                    updated_at=updated_at,
                     metadata=eval(row['metadata']) if row['metadata'] else {},
                     message_count=row['message_count']
                 )
@@ -186,10 +203,12 @@ class DatabaseManager:
                     raise SessionNotFoundError(f"Session {session_id} not found")
                 
                 # Insert message
+                # Handle both string and enum role values
+                role_str = message_data.role.value if hasattr(message_data.role, 'value') else str(message_data.role)
                 cursor = await db.execute(
                     """INSERT INTO messages (session_id, role, content, metadata) 
                        VALUES (?, ?, ?, ?)""",
-                    (session_id, message_data.role.value, message_data.content, str(message_data.metadata))
+                    (session_id, role_str, message_data.content, str(message_data.metadata))
                 )
                 message_id_raw = cursor.lastrowid
                 if message_id_raw is None:
@@ -215,7 +234,7 @@ class DatabaseManager:
                     timestamp=datetime.utcnow()
                 )
                 
-                logger.debug(f"Added message to session {session_id}: {message_data.role.value}")
+                logger.debug(f"Added message to session {session_id}: {role_str}")
                 return message
                 
         except SessionNotFoundError:
@@ -255,12 +274,20 @@ class DatabaseManager:
                 # Reverse to get chronological order (oldest first)
                 messages = []
                 for row in reversed(list(rows)):
+                    # Safe timestamp parsing
+                    timestamp = None
+                    if row['timestamp']:
+                        try:
+                            timestamp = datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00'))
+                        except (ValueError, AttributeError):
+                            timestamp = datetime.utcnow()
+                    
                     messages.append(ChatMessage(
                         id=row['id'],
                         session_id=session_id,
                         role=MessageRole(row['role']),
                         content=row['content'],
-                        timestamp=datetime.fromisoformat(row['timestamp']),
+                        timestamp=timestamp,
                         metadata=eval(row['metadata']) if row['metadata'] else {}
                     ))
                 
@@ -290,12 +317,20 @@ class DatabaseManager:
                 
                 messages = []
                 async for row in cursor:
+                    # Safe timestamp parsing
+                    timestamp = None
+                    if row['timestamp']:
+                        try:
+                            timestamp = datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00'))
+                        except (ValueError, AttributeError):
+                            timestamp = datetime.utcnow()
+                    
                     messages.append(ChatMessage(
                         id=row['id'],
                         session_id=session_id,
                         role=MessageRole(row['role']),
                         content=row['content'],
-                        timestamp=datetime.fromisoformat(row['timestamp']),
+                        timestamp=timestamp,
                         metadata=eval(row['metadata']) if row['metadata'] else {}
                     ))
                 
@@ -328,12 +363,28 @@ class DatabaseManager:
                 
                 sessions = []
                 async for row in cursor:
+                    # Safe datetime parsing
+                    created_at = None
+                    updated_at = None
+                    
+                    if row['created_at']:
+                        try:
+                            created_at = datetime.fromisoformat(row['created_at'].replace('Z', '+00:00'))
+                        except (ValueError, AttributeError):
+                            created_at = datetime.utcnow()
+                    
+                    if row['updated_at']:
+                        try:
+                            updated_at = datetime.fromisoformat(row['updated_at'].replace('Z', '+00:00'))
+                        except (ValueError, AttributeError):
+                            updated_at = datetime.utcnow()
+                    
                     sessions.append(ChatSession(
                         id=row['id'],
                         name=row['name'],
                         status=SessionStatus(row['status']),
-                        created_at=datetime.fromisoformat(row['created_at']),
-                        updated_at=datetime.fromisoformat(row['updated_at']),
+                        created_at=created_at,
+                        updated_at=updated_at,
                         metadata=eval(row['metadata']) if row['metadata'] else {},
                         message_count=row['message_count']
                     ))

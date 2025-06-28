@@ -36,7 +36,7 @@ class ChatMessage(BaseModel):
     role: MessageRole
     content: str
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: Optional[datetime] = None
     
     class Config:
         use_enum_values = True
@@ -53,8 +53,8 @@ class ChatSession(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     name: Optional[str] = None
     status: SessionStatus = Field(default=SessionStatus.ACTIVE)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
     message_count: int = Field(default=0)
     
@@ -84,7 +84,7 @@ class ChatResponse(BaseModel):
     session_id: str
     content: str
     role: MessageRole = Field(default=MessageRole.ASSISTANT)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: Optional[datetime] = None
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 
@@ -121,7 +121,7 @@ class OpenRouterChatRequest(BaseModel):
 class HealthCheck(BaseModel):
     """Model for health check responses"""
     status: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: Optional[datetime] = None
     version: str
     database_connected: bool
     temporal_connected: bool = Field(default=False)
@@ -132,5 +132,5 @@ class ErrorResponse(BaseModel):
     """Model for error responses"""
     error: str
     message: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: Optional[datetime] = None
     details: Optional[Dict[str, Any]] = None 

@@ -36,8 +36,15 @@ class DatabaseActivities:
     async def add_message(session_id: str, message_data: Dict[str, Any]) -> Dict[str, Any]:
         """Add a message to a session"""
         try:
+            # Handle string role values from workflow
+            role_str = message_data["role"]
+            if isinstance(role_str, str):
+                message_role = MessageRole(role_str)
+            else:
+                message_role = role_str
+                
             message_create = ChatMessageCreate(
-                role=MessageRole(message_data["role"]),
+                role=message_role,
                 content=message_data["content"],
                 metadata=message_data.get("metadata", {})
             )
@@ -49,10 +56,10 @@ class DatabaseActivities:
             return {
                 "id": message.id,
                 "session_id": message.session_id,
-                "role": message.role.value,
+                "role": message.role.value if hasattr(message.role, 'value') else str(message.role),
                 "content": message.content,
                 "metadata": message.metadata,
-                "timestamp": message.timestamp.isoformat()
+                "timestamp": message.timestamp.isoformat() if message.timestamp else None
             }
             
         except SessionNotFoundError:
@@ -64,7 +71,7 @@ class DatabaseActivities:
     
     @staticmethod
     @activity.defn
-    async def get_session_context(session_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+    async def get_session_context(session_id: str, limit: int = 5) -> Dict[str, Any]:
         """Get recent messages from a session for context"""
         try:
             context = await db_manager.get_session_context(session_id, limit)
@@ -73,14 +80,20 @@ class DatabaseActivities:
             for message in context.messages:
                 messages.append({
                     "id": message.id,
-                    "role": message.role.value,
+                    "role": message.role.value if hasattr(message.role, 'value') else str(message.role),
                     "content": message.content,
                     "metadata": message.metadata,
-                    "timestamp": message.timestamp.isoformat()
+                    "timestamp": message.timestamp.isoformat() if message.timestamp else None
                 })
             
             activity.logger.debug(f"Retrieved {len(messages)} context messages for session {session_id}")
-            return messages
+            
+            # Return in the format expected by the workflow
+            return {
+                "messages": messages,
+                "session_id": session_id,
+                "total_messages": len(messages)
+            }
             
         except SessionNotFoundError:
             activity.logger.error(f"Session not found: {session_id}")
@@ -103,8 +116,8 @@ class DatabaseActivities:
                 "id": session.id,
                 "name": session.name,
                 "status": session.status.value,
-                "created_at": session.created_at.isoformat(),
-                "updated_at": session.updated_at.isoformat(),
+                "created_at": session.created_at.isoformat() if session.created_at else None,
+                "updated_at": session.updated_at.isoformat() if session.updated_at else None,
                 "metadata": session.metadata,
                 "message_count": session.message_count
             }
@@ -155,10 +168,10 @@ class DatabaseActivities:
             for message in messages:
                 history.append({
                     "id": message.id,
-                    "role": message.role.value,
+                    "role": message.role.value if hasattr(message.role, 'value') else str(message.role),
                     "content": message.content,
                     "metadata": message.metadata,
-                    "timestamp": message.timestamp.isoformat()
+                    "timestamp": message.timestamp.isoformat() if message.timestamp else None
                 })
             
             activity.logger.debug(f"Retrieved {len(history)} history messages for session {session_id}")
@@ -182,8 +195,8 @@ class DatabaseActivities:
                     "id": session.id,
                     "name": session.name,
                     "status": session.status.value,
-                    "created_at": session.created_at.isoformat(),
-                    "updated_at": session.updated_at.isoformat(),
+                    "created_at": session.created_at.isoformat() if session.created_at else None,
+                    "updated_at": session.updated_at.isoformat() if session.updated_at else None,
                     "metadata": session.metadata,
                     "message_count": session.message_count
                 })

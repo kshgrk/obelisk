@@ -31,6 +31,7 @@ class OpenRouterSettings(BaseModel):
 class TemporalSettings(BaseModel):
     """Temporal workflow configuration"""
     server_url: str = Field(default="localhost:7233")
+    web_ui_port: int = Field(default=8280)
     namespace: str = Field(default="default")
     task_queue: str = Field(default="obelisk-task-queue")
     workflow_execution_timeout: int = Field(default=3600)  # 1 hour

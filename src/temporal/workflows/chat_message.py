@@ -63,7 +63,7 @@ class ChatMessageWorkflow:
             )
             
             # Step 3: Prepare OpenRouter request
-            openrouter_messages = self._prepare_openrouter_messages(context_messages)
+            openrouter_messages = self._prepare_openrouter_messages(context_messages["messages"])
             
             # Step 4: Get AI response
             if streaming:
