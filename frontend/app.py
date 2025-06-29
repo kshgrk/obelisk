@@ -2,14 +2,42 @@
 Obelisk Chat Frontend Application
 """
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Request, Query
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import httpx
 import json
+from datetime import datetime
+import asyncio
+import logging
+from typing import Optional
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="Obelisk Frontend")
+# Import the event system
+import sys
+import os
+
+# Add the project root to Python path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
+# Event system removed - using direct streaming from /chat endpoint
+
+logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan handler for startup and shutdown"""
+    # Startup
+    logger.info("Starting Obelisk Frontend")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down Obelisk Frontend")
+
+app = FastAPI(title="Obelisk Frontend", lifespan=lifespan)
 
 # Backend API base URL
 BACKEND_URL = "http://localhost:8001"
@@ -23,6 +51,8 @@ templates = Jinja2Templates(directory="templates")
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+# Events endpoints removed - using direct streaming from /chat endpoint
 
 @app.get("/sessions")
 async def get_sessions():
@@ -158,7 +188,6 @@ def format_timestamp(timestamp_str):
         return "Just now"
     
     try:
-        from datetime import datetime
         # Handle format like "2025-06-28 14:49:42"
         if " " in timestamp_str and ":" in timestamp_str:
             dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
@@ -171,6 +200,142 @@ def format_timestamp(timestamp_str):
             return timestamp_str
     except Exception:
         return timestamp_str
+
+@app.post("/api/sessions")
+async def create_session(request: Request):
+    """Proxy session creation to backend"""
+    try:
+        body = await request.json()
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{BACKEND_URL}/sessions", json=body)
+            return response.json()
+    except Exception as e:
+        print(f"Error creating session: {e}")
+        return JSONResponse({"error": "Failed to create session"}, status_code=500)
+
+@app.post("/api/chat")
+async def send_message(request: Request):
+    """Proxy chat messages to backend using the /chat endpoint with conversation history"""
+    try:
+        body = await request.json()
+        print(f"Frontend received chat request: {body}")
+        
+        # Extract data from frontend request
+        message_content = body.get("message", "")
+        session_id = body.get("session_id")
+        stream = body.get("stream", False)
+        
+        if not session_id:
+            return JSONResponse({"error": "session_id is required"}, status_code=400)
+        
+        if not message_content.strip():
+            return JSONResponse({"error": "message cannot be empty"}, status_code=400)
+        
+        # Create request for backend /chat endpoint
+        chat_request = {
+            "session_id": session_id,
+            "message": message_content,
+            "stream": stream
+        }
+        
+        # Add timeout to prevent hanging
+        timeout = httpx.Timeout(60.0)  # Increased to 60s for chat workflows
+        
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            print(f"Forwarding to: {BACKEND_URL}/chat")
+            response = await client.post(f"{BACKEND_URL}/chat", json=chat_request)
+            print(f"Backend response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                error_text = response.text
+                print(f"Backend error response: {error_text}")
+                return JSONResponse({
+                    "error": f"Backend error: {error_text}",
+                    "status_code": response.status_code
+                }, status_code=response.status_code)
+            
+            # Handle streaming vs non-streaming responses
+            if stream:
+                # For streaming responses, we need to collect all the chunks
+                full_content = ""
+                content_type = response.headers.get("content-type", "")
+                
+                if "text/plain" in content_type:  # Streaming response
+                    response_text = response.text
+                    
+                    # Parse the SSE streaming data to extract content
+                    lines = response_text.split('\n')
+                    for line in lines:
+                        if line.startswith('data: ') and not line.endswith('[DONE]'):
+                            try:
+                                chunk_data = json.loads(line[6:])  # Remove 'data: '
+                                if 'content' in chunk_data:
+                                    full_content += chunk_data['content']
+                            except json.JSONDecodeError:
+                                continue
+                    
+                    response_content = full_content
+                else:
+                    # Try to parse as JSON
+                    try:
+                        result = response.json()
+                        response_content = result.get("response", result.get("content", "No response received"))
+                    except json.JSONDecodeError:
+                        response_content = response.text
+            else:
+                # Non-streaming response
+                try:
+                    result = response.json()
+                    response_content = result.get("response", result.get("content", "No response received"))
+                except json.JSONDecodeError:
+                    response_content = response.text
+            
+            print(f"Processed response content: {response_content[:100]}...")
+            
+            # Return in OpenRouter-compatible format for frontend consistency
+            return {
+                "id": f"chatcmpl-{session_id[-8:]}",
+                "object": "chat.completion",
+                "created": int(datetime.now().timestamp()),
+                "model": "deepseek/deepseek-chat-v3-0324:free",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": response_content
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": len(message_content.split()),
+                    "completion_tokens": len(response_content.split()),
+                    "total_tokens": len(message_content.split()) + len(response_content.split())
+                }
+            }
+            
+    except httpx.TimeoutException:
+        print("Request timed out")
+        return JSONResponse({
+            "error": "Request timed out. Please try again.",
+            "timeout": True
+        }, status_code=504)
+    except Exception as e:
+        print(f"Error in send_message: {e}")
+        return JSONResponse({
+            "error": f"Failed to send message: {str(e)}"
+        }, status_code=500)
+
+@app.post("/api/chat/completions")
+async def chat_completions(request: Request):
+    """Proxy OpenAI-compatible completions to backend"""
+    try:
+        body = await request.json()
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{BACKEND_URL}/chat/completions", json=body)
+            return response.json()
+    except Exception as e:
+        print(f"Error with chat completions: {e}")
+        return JSONResponse({"error": "Failed to process completion"}, status_code=500)
 
 @app.get("/health")
 async def health():

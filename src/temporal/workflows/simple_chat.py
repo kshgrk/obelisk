@@ -75,7 +75,8 @@ class SimpleChatWorkflow:
                         "messages": openrouter_messages,
                         "temperature": 0.7,
                         "max_tokens": 1000,
-                        "stream": True
+                        "stream": True,
+                        "session_id": session_id  # Add session_id for event emission
                     }],
                     start_to_close_timeout=timedelta(seconds=60),
                     retry_policy=retry_policy,
@@ -88,7 +89,8 @@ class SimpleChatWorkflow:
                         "messages": openrouter_messages,
                         "temperature": 0.7,
                         "max_tokens": 1000,
-                        "stream": False
+                        "stream": False,
+                        "session_id": session_id  # Add session_id for event emission
                     }],
                     start_to_close_timeout=timedelta(seconds=60),
                     retry_policy=retry_policy,

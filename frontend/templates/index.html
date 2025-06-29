@@ -183,29 +183,24 @@
                 const message = messageInput.value.trim();
                 if (!message || !currentSessionId) return;
                 
-                // Add message to chat (optimistic update)
+                // Add user message to chat (optimistic update)
                 addMessageToChat('user', message);
                 
                 // Clear input
                 messageInput.value = '';
                 messageInput.style.height = 'auto';
                 
-                // Send message to backend
-                sendMessage(message);
+                // Send message using the main.js sendMessage function with direct streaming
+                if (window.sendMessage) {
+                    window.sendMessage(message);
+                } else {
+                    console.error('sendMessage function not available');
+                }
             });
             
             // Global function to enable/disable chat input
             window.enableChatInput = enableChatInput;
             window.disableChatInput = disableChatInput;
-            
-            // Override the loadSession function to enable input when session loads
-            const originalLoadSession = window.loadSession;
-            window.loadSession = function(sessionId) {
-                return originalLoadSession(sessionId).then(() => {
-                    enableChatInput();
-                    hideWelcomeMessage();
-                });
-            };
             
             function hideWelcomeMessage() {
                 const welcomeMessage = document.querySelector('.welcome-message');
@@ -228,39 +223,10 @@
                 chatMessages.scrollTop = chatMessages.scrollHeight;
             }
             
-            async function sendMessage(message) {
-                try {
-                    // This would connect to your chat API endpoint
-                    const response = await fetch('/api/chat', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            session_id: currentSessionId,
-                            message: message
-                        })
-                    });
-                    
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    
-                    const result = await response.json();
-                    
-                    // Add assistant response to chat
-                    if (result.content) {
-                        addMessageToChat('assistant', result.content);
-                    }
-                    
-                    // Refresh session to update message count
-                    await loadSession(currentSessionId);
-                    
-                } catch (error) {
-                    console.error('Error sending message:', error);
-                    addMessageToChat('system', 'Error: Failed to send message. Please try again.');
-                }
-            }
+            // Make addMessageToChat available globally
+            window.addMessageToChat = addMessageToChat;
+            
+            // Note: sendMessage is defined in main.js with proper direct streaming support
         });
     </script>
 </body>

@@ -778,4 +778,87 @@ body {
 .session-list::-webkit-scrollbar-thumb:hover,
 .chat-messages::-webkit-scrollbar-thumb:hover {
     background: #94a3b8;
+}
+
+/* Streaming Message Styles */
+.message.streaming {
+    position: relative;
+    animation: fadeIn 0.3s ease-in;
+}
+
+.message.streaming .message-content {
+    position: relative;
+}
+
+.streaming-cursor {
+    color: #3b82f6;
+    font-weight: bold;
+    animation: blink 1s infinite;
+    margin-left: 2px;
+}
+
+@keyframes blink {
+    0%, 50% {
+        opacity: 1;
+    }
+    51%, 100% {
+        opacity: 0;
+    }
+}
+
+.message.streaming::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #3b82f6, transparent);
+    animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+    0% {
+        transform: translateX(-100%);
+    }
+    100% {
+        transform: translateX(100%);
+    }
+}
+
+.message.error .message-content {
+    background: #fef2f2;
+    border-left: 4px solid #ef4444;
+    padding: 12px;
+    border-radius: 8px;
+}
+
+.error-message {
+    color: #dc2626;
+    font-style: italic;
+}
+
+/* Improved message animations */
+.message {
+    animation: slideInMessage 0.3s ease-out;
+}
+
+@keyframes slideInMessage {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
 } 

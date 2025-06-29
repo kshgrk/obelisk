@@ -16,6 +16,8 @@ from src.database.manager import db_manager
 from src.temporal.client import temporal_client
 from src.api.router import api_router
 
+# Event system removed - using direct streaming from /chat endpoint
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,12 +38,14 @@ app.include_router(api_router)
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database and test Temporal connection on startup"""
+    """Initialize database, event system, and test Temporal connection on startup"""
     logger.info("Starting Obelisk FastAPI server with Temporal integration...")
     
     # Initialize database
     await db_manager.initialize()
     logger.info("Database initialized")
+    
+    # Event system removed - using direct streaming from /chat endpoint
     
     # Test Temporal connection (optional - don't fail startup if Temporal is down)
     try:
@@ -57,6 +61,9 @@ async def startup_event():
 async def shutdown_event():
     """Cleanup on server shutdown"""
     logger.info("Shutting down Obelisk FastAPI server...")
+    
+    # Event system removed - no cleanup needed
+    
     logger.info("Server shutdown complete")
 
 if __name__ == "__main__":

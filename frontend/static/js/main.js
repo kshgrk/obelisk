@@ -1,23 +1,440 @@
 // Main JavaScript file for Obelisk Chat
-// Handles session management and chat functionality
+// Handles session management and chat functionality with direct streaming
 
 // API Configuration
 const API_BASE_URL = '';
+const BACKEND_API_URL = 'http://localhost:8001'; // Direct backend connection for streaming
 
 // Application State
 let currentSessionId = null;
 let sessions = [];
 let isLoading = false;
+// SSE connection removed - now using direct streaming
+let currentStreamingMessage = null;
 
 document.addEventListener('DOMContentLoaded', function() {
     console.log('Obelisk Chat initialized');
+    console.log('Backend API URL:', BACKEND_API_URL);
+    console.log('Frontend API URL:', API_BASE_URL || 'relative paths');
     
     // Load sessions on startup
     loadSessions();
     
     // Set up event handlers
     setupEventHandlers();
+    
+    // Test backend connectivity
+    testBackendConnection();
 });
+
+// === Direct Streaming Functions ===
+// SSE removed - now using direct streaming from /chat endpoint
+
+// Old SSE event handling removed - now handled directly in streaming response
+
+/**
+ * Start a new streaming message
+ */
+function startStreamingMessage(data) {
+    console.log('🚀 Starting streaming message for session:', currentSessionId);
+    
+    // Create a new assistant message with streaming indicator
+    const messageId = `streaming-${Date.now()}`;
+    currentStreamingMessage = {
+        id: messageId,
+        type: 'assistant',
+        content: '',
+        isStreaming: true,
+        timestamp: new Date()
+    };
+    
+    console.log('Created streaming message object:', currentStreamingMessage);
+    
+    // Add the streaming message to the chat
+    addStreamingMessageToChat(currentStreamingMessage);
+    
+    console.log('Streaming message added to chat UI');
+}
+
+/**
+ * Update streaming message with new content
+ */
+function updateStreamingMessage(data) {
+    if (!currentStreamingMessage) {
+        console.warn('Received streaming content but no active streaming message');
+        return;
+    }
+    
+    // Append new content - extract from data.data.content based on backend event structure
+    const content = data.data?.content || data.content; // Support both structures
+    if (content) {
+        console.log(`📝 Streaming content: "${content}" (length: ${content.length})`);
+        currentStreamingMessage.content += content;
+        
+        // Update the message element in real-time
+        const messageElement = document.querySelector(`[data-message-id="${currentStreamingMessage.id}"] .message-content`);
+        if (messageElement) {
+            messageElement.innerHTML = formatMessageContent(currentStreamingMessage.content, 'assistant') + '<span class="streaming-cursor">▊</span>';
+        }
+        
+        // Auto-scroll to bottom
+        scrollToBottom();
+    }
+}
+
+/**
+ * Complete streaming message
+ */
+function completeStreamingMessage(data) {
+    if (!currentStreamingMessage) {
+        console.warn('Received completion but no active streaming message');
+        return;
+    }
+    
+    console.log('Completing streaming message');
+    
+    // Update with final content if provided - extract from data.data.content based on backend event structure
+    const finalContent = data.data?.content || data.content; // Support both structures
+    if (finalContent) {
+        currentStreamingMessage.content = finalContent;
+    }
+    
+    // Remove streaming cursor and mark as complete
+    const messageElement = document.querySelector(`[data-message-id="${currentStreamingMessage.id}"]`);
+    if (messageElement) {
+        const contentElement = messageElement.querySelector('.message-content');
+        if (contentElement) {
+            contentElement.innerHTML = formatMessageContent(currentStreamingMessage.content, 'assistant');
+        }
+        
+        // Remove streaming class
+        messageElement.classList.remove('streaming');
+    }
+    
+    currentStreamingMessage = null;
+    scrollToBottom();
+}
+
+/**
+ * Handle streaming errors
+ */
+function handleStreamingError(data) {
+    console.error('Streaming error:', data);
+    
+    if (currentStreamingMessage) {
+        const messageElement = document.querySelector(`[data-message-id="${currentStreamingMessage.id}"]`);
+        if (messageElement) {
+            const contentElement = messageElement.querySelector('.message-content');
+            if (contentElement) {
+                contentElement.innerHTML = `<div class="error-message">Error: ${data.error || 'Failed to process message'}</div>`;
+            }
+            messageElement.classList.remove('streaming');
+            messageElement.classList.add('error');
+        }
+        currentStreamingMessage = null;
+    }
+    
+    const errorMessage = data.data?.error || data.error || 'Unknown error'; // Support both structures
+    showError(`Chat error: ${errorMessage}`);
+}
+
+/**
+ * Add a streaming message to the chat interface
+ */
+function addStreamingMessageToChat(message) {
+    console.log('Adding streaming message to chat:', message.id);
+    
+    const chatMessages = document.querySelector('.chat-messages');
+    if (!chatMessages) {
+        console.error('❌ Chat messages container not found');
+        return;
+    }
+    
+    // Hide no-messages placeholder if it exists
+    const noMessages = chatMessages.querySelector('.no-messages');
+    if (noMessages) {
+        console.log('Hiding no-messages placeholder');
+        noMessages.style.display = 'none';
+    }
+    
+    // Hide welcome message if it exists  
+    const welcomeMessage = document.querySelector('.welcome-message');
+    if (welcomeMessage) {
+        console.log('Hiding welcome message');
+        welcomeMessage.style.display = 'none';
+    }
+    
+    const messageHTML = `
+        <div class="message assistant-message streaming" data-message-id="${message.id}">
+            <div class="message-content">${formatMessageContent(message.content, 'assistant')}<span class="streaming-cursor">▊</span></div>
+            <div class="message-time">${formatTime(message.timestamp)}</div>
+        </div>
+    `;
+    
+    console.log('Inserting message HTML into chat');
+    chatMessages.insertAdjacentHTML('beforeend', messageHTML);
+    
+    // Verify the message was added
+    const addedMessage = document.querySelector(`[data-message-id="${message.id}"]`);
+    if (addedMessage) {
+        console.log('✅ Streaming message successfully added to DOM');
+    } else {
+        console.error('❌ Failed to add streaming message to DOM');
+    }
+    
+    scrollToBottom();
+}
+
+/**
+ * Send a message with direct streaming support
+ */
+async function sendMessage(messageText) {
+    if (!currentSessionId || !messageText.trim()) {
+        return;
+    }
+
+    try {
+        console.log('Sending message:', messageText);
+        
+        // Add user message to chat immediately
+        addMessageToChat('user', messageText.trim());
+        
+        // Clear input field
+        const chatInput = document.querySelector('#chat-input');
+        if (chatInput) {
+            chatInput.value = '';
+        }
+        
+        // Send message to backend with streaming enabled
+        const response = await fetch(`${BACKEND_API_URL}/chat`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                session_id: currentSessionId,
+                message: messageText.trim(),
+                stream: true
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        // Check if it's a streaming response
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('text/event-stream')) {
+            console.log('📡 Received streaming response, processing events...');
+            await handleStreamingResponse(response);
+        } else {
+            // Non-streaming response
+            const data = await response.json();
+            console.log('Chat response:', data);
+            if (data.response) {
+                addMessageToChat('assistant', data.response);
+            }
+        }
+        
+    } catch (error) {
+        console.error('Error sending message:', error);
+        showError(`Failed to send message: ${error.message}`);
+    }
+}
+
+/**
+ * Handle streaming response from chat endpoint
+ */
+async function handleStreamingResponse(response) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let currentStreamingMessage = null;
+    
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            
+            if (done) {
+                console.log('📊 Streaming completed');
+                break;
+            }
+            
+            // Decode chunk and add to buffer
+            buffer += decoder.decode(value, { stream: true });
+            
+            // Process complete lines
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Keep incomplete line in buffer
+            
+            for (const line of lines) {
+                if (line.trim()) {
+                    try {
+                        // Handle SSE format: lines start with "data: " followed by JSON
+                        let eventData;
+                        if (line.startsWith('data: ')) {
+                            // Extract JSON from SSE data line
+                            const jsonStr = line.substring(6); // Remove "data: " prefix
+                            eventData = JSON.parse(jsonStr);
+                        } else if (line.startsWith('{')) {
+                            // Direct JSON (fallback for other formats)
+                            eventData = JSON.parse(line);
+                        } else {
+                            // Skip non-data lines (like keep-alive comments)
+                            continue;
+                        }
+                        
+                        console.log('📩 Stream event:', eventData.event, eventData.content);
+                        
+                        switch (eventData.event) {
+                            case 'RunStarted':
+                                console.log('🚀 Chat run started');
+                                // Create new streaming message
+                                currentStreamingMessage = {
+                                    id: `stream-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                                    content: '',
+                                    timestamp: new Date()
+                                };
+                                addStreamingMessageToChat(currentStreamingMessage);
+                                break;
+                                
+                            case 'RunResponse':
+                                // Add character to streaming message
+                                if (currentStreamingMessage) {
+                                    currentStreamingMessage.content += eventData.content;
+                                    updateStreamingMessageContent(currentStreamingMessage);
+                                }
+                                break;
+                                
+                            case 'RunCompleted':
+                                console.log('✅ Chat run completed');
+                                if (currentStreamingMessage) {
+                                    // Finalize message with complete content
+                                    currentStreamingMessage.content = eventData.content;
+                                    completeStreamingMessageFinal(currentStreamingMessage);
+                                    currentStreamingMessage = null;
+                                }
+                                
+                                // Remove auto-refresh to prevent duplicate user messages
+                                // Since we're already handling real-time updates, refresh is not needed
+                                break;
+                                
+                            case 'RunError':
+                                console.error('❌ Chat run error:', eventData.error);
+                                if (currentStreamingMessage) {
+                                    showStreamingError(currentStreamingMessage, eventData.error);
+                                    currentStreamingMessage = null;
+                                }
+                                break;
+                        }
+                        
+                    } catch (parseError) {
+                        console.warn('⚠️ Failed to parse event:', line, parseError);
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        console.error('❌ Streaming error:', error);
+        showError(`Streaming failed: ${error.message}`);
+    }
+}
+
+/**
+ * Update streaming message content in real-time
+ */
+function updateStreamingMessageContent(message) {
+    const messageElement = document.querySelector(`[data-message-id="${message.id}"] .message-content`);
+    if (messageElement) {
+        messageElement.innerHTML = formatMessageContent(message.content, 'assistant') + '<span class="streaming-cursor">▊</span>';
+        scrollToBottom();
+    }
+}
+
+/**
+ * Complete streaming message (remove cursor, mark as final)
+ */
+function completeStreamingMessageFinal(message) {
+    const messageElement = document.querySelector(`[data-message-id="${message.id}"]`);
+    if (messageElement) {
+        const contentElement = messageElement.querySelector('.message-content');
+        if (contentElement) {
+            contentElement.innerHTML = formatMessageContent(message.content, 'assistant');
+        }
+        messageElement.classList.remove('streaming');
+    }
+    scrollToBottom();
+}
+
+/**
+ * Show streaming error
+ */
+function showStreamingError(message, error) {
+    const messageElement = document.querySelector(`[data-message-id="${message.id}"]`);
+    if (messageElement) {
+        const contentElement = messageElement.querySelector('.message-content');
+        if (contentElement) {
+            contentElement.innerHTML = `<div class="error-message">Error: ${error}</div>`;
+        }
+        messageElement.classList.remove('streaming');
+        messageElement.classList.add('error');
+    }
+}
+
+/**
+ * Add a streaming message to chat with blinking cursor
+ */
+function addStreamingMessageToChat(message) {
+    const chatMessages = document.querySelector('.chat-messages');
+    if (!chatMessages) return;
+
+    const messageElement = document.createElement('div');
+    messageElement.className = 'message assistant streaming';
+    messageElement.setAttribute('data-message-id', message.id);
+    
+    messageElement.innerHTML = `
+        <div class="message-avatar">
+            <div class="assistant-avatar">AI</div>
+        </div>
+        <div class="message-content-wrapper">
+            <div class="message-content">${message.content}<span class="streaming-cursor">▊</span></div>
+            <div class="message-timestamp">${formatTimestamp(message.timestamp)}</div>
+        </div>
+    `;
+    
+    chatMessages.appendChild(messageElement);
+    scrollToBottom();
+}
+
+/**
+ * Add a regular message to chat (for user messages or fallback)
+ */
+function addMessageToChat(messageType, content, timestamp = new Date()) {
+    const chatMessages = document.querySelector('.chat-messages');
+    if (!chatMessages) return;
+    
+    // Hide no-messages placeholder if it exists
+    const noMessages = chatMessages.querySelector('.no-messages');
+    if (noMessages) {
+        noMessages.style.display = 'none';
+    }
+    
+    const message = {
+        id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        type: messageType,
+        content: content,
+        timestamp: timestamp
+    };
+    
+    const messageHTML = createMessageElement(message);
+    const messageElement = document.createElement('div');
+    messageElement.innerHTML = messageHTML;
+    
+    chatMessages.appendChild(messageElement.firstElementChild);
+    scrollToBottom();
+}
+
+// === Session Management Functions ===
 
 async function loadSessions() {
     try {
@@ -90,11 +507,13 @@ function renderSessions(sessions) {
     });
 }
 
-
-
 async function loadSession(sessionId) {
     try {
         console.log('Loading session:', sessionId);
+        
+        // Disconnect any existing SSE connection
+        // SSE disconnection removed
+        
         currentSessionId = sessionId;
         
         // Show loading state
@@ -139,6 +558,19 @@ async function loadSession(sessionId) {
             
             updateSessionHeader(parsedSession);
             renderConversationHistory(parsedSession.messages);
+        }
+        
+        // SSE connection no longer needed - using direct streaming from chat endpoint
+        
+        // Enable chat input after successful load
+        if (typeof window.enableChatInput === 'function') {
+            window.enableChatInput();
+        }
+        
+        // Hide welcome message
+        const welcomeMessage = document.querySelector('.welcome-message');
+        if (welcomeMessage) {
+            welcomeMessage.style.display = 'none';
         }
         
     } catch (error) {
@@ -338,7 +770,7 @@ function showError(message) {
 
 async function createNewSession() {
     try {
-        const response = await fetch(`${API_BASE_URL}/sessions`, {
+        const response = await fetch(`${API_BASE_URL}/api/sessions`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -415,3 +847,76 @@ function searchSessions(event) {
 window.loadSessions = loadSessions;
 window.loadSession = loadSession;
 window.createNewSession = createNewSession; 
+window.sendMessage = sendMessage;
+window.addMessageToChat = addMessageToChat;
+
+// === Missing utility functions for conversation parsing ===
+
+/**
+ * Debug conversation structure for development
+ */
+function debugConversationStructure(sessionData) {
+    console.log('Session data structure:', {
+        hasConversationHistory: !!sessionData.conversation_history,
+        conversationKeys: sessionData.conversation_history ? Object.keys(sessionData.conversation_history) : [],
+        turnsLength: sessionData.conversation_history?.conversation_turns?.length || 0,
+        firstTurn: sessionData.conversation_history?.conversation_turns?.[0] || null
+    });
+}
+
+/**
+ * Validate conversation data structure
+ */
+function validateConversationData(sessionData) {
+    return sessionData.conversation_history && 
+           sessionData.conversation_history.conversation_turns && 
+           Array.isArray(sessionData.conversation_history.conversation_turns);
+}
+
+/**
+ * Extract conversation messages from validated session data
+ */
+function extractConversationMessages(conversationHistory) {
+    if (!conversationHistory || !conversationHistory.conversation_turns) {
+        return [];
+    }
+    
+    return parseConversationTurns(conversationHistory.conversation_turns);
+}
+
+/**
+ * Extract session metadata
+ */
+function extractSessionMetadata(sessionData) {
+    return {
+        id: sessionData.session_id || sessionData.id,
+        name: sessionData.name || `Session ${sessionData.session_id?.substring(0, 8) || 'Unknown'}`,
+        status: sessionData.status || 'unknown',
+        messageCount: sessionData.message_count || 0,
+        metadata: sessionData.metadata || {}
+    };
+}
+
+/**
+ * Cleanup function when page unloads
+ */
+window.addEventListener('beforeunload', function() {
+    // SSE cleanup removed - using direct streaming
+});
+
+// === Backend Connection Test ===
+async function testBackendConnection() {
+    try {
+        console.log('Testing backend connection...');
+        const response = await fetch(`${BACKEND_API_URL}/health`);
+        if (response.ok) {
+            const data = await response.json();
+            console.log('✅ Backend connection successful:', data);
+        } else {
+            console.warn('⚠️ Backend health check failed:', response.status);
+        }
+    } catch (error) {
+        console.error('❌ Backend connection failed:', error);
+        showError('Backend connection failed. Some features may not work.');
+    }
+} 

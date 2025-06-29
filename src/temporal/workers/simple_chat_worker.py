@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 async def start_optimized_chat_worker():
-    """Start the optimized chat worker with conversation_turns support"""
+    """Start the optimized chat worker with conversation_turns support and SSE event emission"""
     try:
         # Connect to Temporal
         client = await Client.connect("localhost:7233")
@@ -56,6 +56,7 @@ async def start_optimized_chat_worker():
         logger.info("Starting optimized chat worker with conversation_turns support...")
         logger.info("Registered workflows: SimpleChatWorkflow, SimpleStreamingChatWorkflow, ChatSessionWorkflow")
         logger.info("Registered activities: Optimized Database and OpenRouter activities")
+        logger.info("✅ Event emission is handled by OpenRouter activities → API router SSE system")
         
         await worker.run()
         
