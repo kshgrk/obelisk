@@ -38,12 +38,14 @@ async def start_optimized_chat_worker():
                 DatabaseActivities.save_conversation_turn,
                 DatabaseActivities.get_conversation_context,
                 DatabaseActivities.get_full_conversation,
+                DatabaseActivities.update_session_config,
+                DatabaseActivities.update_session_statistics,
                 DatabaseActivities.update_session_metadata,
                 DatabaseActivities.get_session_info,
+                DatabaseActivities.generate_ai_response,
                 
-                # Legacy compatibility activities
+                # Legacy compatibility activities (disabled)
                 DatabaseActivities.add_message,
-                DatabaseActivities.get_session_context,
                 
                 # OpenRouter activities  
                 OpenRouterActivities.chat_completion,
