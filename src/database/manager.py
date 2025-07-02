@@ -55,6 +55,18 @@ class DatabaseManager:
                 )
             """)
             
+            # Create models table for OpenRouter model management
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS models (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    is_tool_call BOOLEAN NOT NULL DEFAULT 0,
+                    context_length INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
             await db.commit()
             logger.info("Database initialized with optimized schema")
 
@@ -422,6 +434,67 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"Failed to get session context: {e}")
+            raise
+
+    async def save_models(self, models: List[dict]):
+        """Save or update models in the database"""
+        try:
+            async with self.get_connection() as db:
+                await db.execute("BEGIN")
+                try:
+                    # Clear existing models
+                    await db.execute("DELETE FROM models")
+                    
+                    # Insert new models
+                    for model in models:
+                        await db.execute("""
+                            INSERT INTO models (id, name, is_tool_call, context_length) 
+                            VALUES (?, ?, ?, ?)
+                        """, (
+                            model['id'], 
+                            model['name'], 
+                            model.get('is_tool_call', False),
+                            model.get('context_length', 0)
+                        ))
+                    
+                    await db.commit()
+                    logger.info(f"Saved {len(models)} models to database")
+                    
+                except Exception:
+                    await db.rollback()
+                    raise
+                    
+        except Exception as e:
+            logger.error(f"Failed to save models: {e}")
+            raise
+    
+    async def get_models(self, tools_only: bool = False) -> List[dict]:
+        """Get all models, optionally filtered by tool call capability"""
+        try:
+            async with self.get_connection() as db:
+                query = "SELECT id, name, is_tool_call, context_length FROM models"
+                params = ()
+                
+                if tools_only:
+                    query += " WHERE is_tool_call = 1"
+                
+                query += " ORDER BY name"
+                
+                cursor = await db.execute(query, params)
+                rows = await cursor.fetchall()
+                
+                return [
+                    {
+                        "id": row['id'],
+                        "name": row['name'], 
+                        "is_tool_call": bool(row['is_tool_call']),
+                        "context_length": row['context_length'] or 0
+                    }
+                    for row in rows
+                ]
+                
+        except Exception as e:
+            logger.error(f"Failed to get models: {e}")
             raise
 
 # Global instance

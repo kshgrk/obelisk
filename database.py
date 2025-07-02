@@ -40,6 +40,17 @@ class DatabaseManager:
                 )
             """)
             
+            # Create models table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS models (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    is_tool_call BOOLEAN NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
             # Create index for faster queries
             await db.execute("""
                 CREATE INDEX IF NOT EXISTS idx_messages_session_timestamp 
@@ -144,4 +155,46 @@ class DatabaseManager:
                 "created_at": session_data[1],
                 "updated_at": session_data[2],
                 "messages": messages
-            } 
+            }
+    
+    async def save_models(self, models: List[dict]):
+        """Save or update models in the database"""
+        async with aiosqlite.connect(self.db_path) as db:
+            # Clear existing models
+            await db.execute("DELETE FROM models")
+            
+            # Insert new models
+            for model in models:
+                await db.execute("""
+                    INSERT INTO models (id, name, is_tool_call) 
+                    VALUES (?, ?, ?)
+                """, (
+                    model['id'], 
+                    model['name'], 
+                    model.get('is_tool_call', False)
+                ))
+            
+            await db.commit()
+    
+    async def get_models(self, tools_only: bool = False) -> List[dict]:
+        """Get all models, optionally filtered by tool call capability"""
+        async with aiosqlite.connect(self.db_path) as db:
+            query = "SELECT id, name, is_tool_call FROM models"
+            params = ()
+            
+            if tools_only:
+                query += " WHERE is_tool_call = 1"
+            
+            query += " ORDER BY name"
+            
+            cursor = await db.execute(query, params)
+            rows = await cursor.fetchall()
+            
+            return [
+                {
+                    "id": row[0],
+                    "name": row[1], 
+                    "is_tool_call": bool(row[2])
+                }
+                for row in rows
+            ] 

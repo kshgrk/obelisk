@@ -123,13 +123,11 @@ const appState = new AppState();
 // Config Management
 class ConfigManager {
     constructor() {
-        this.modelOptions = [
-            { value: "qwen/qwen3-235b-a22b:free", label: "Qwen 3.2 235B (Free)" },
-            { value: "deepseek/deepseek-r1-0528:free", label: "DeepSeek R1 (Free)" },
-            { value: "mistralai/mistral-small-3.2-24b-instruct:free", label: "Mistral Small 3.2 (Free)" },
-            { value: "deepseek/deepseek-chat-v3-0324:free", label: "DeepSeek Chat v3 (Default)" }
-        ];
+        this.modelOptions = [];
+        this.allModels = [];
+        this.filteredModels = [];
         this.initializeModal();
+        this.loadModels();
     }
 
     initializeModal() {
@@ -138,6 +136,11 @@ class ConfigManager {
         this.modelSelect = document.getElementById('modelSelect');
         this.temperatureSlider = document.getElementById('temperatureSlider');
         this.maxTokensInput = document.getElementById('maxTokensInput');
+
+        // Model controls
+        this.refreshModelsBtn = document.getElementById('refreshModelsBtn');
+        this.modelSearch = document.getElementById('modelSearch');
+        this.toolsOnlyFilter = document.getElementById('toolsOnlyFilter');
 
         // Value display elements
         this.temperatureValue = document.getElementById('temperatureValue');
@@ -161,6 +164,11 @@ class ConfigManager {
         document.getElementById('cancelConfigBtn').addEventListener('click', () => this.closeModal());
         document.getElementById('saveConfigBtn').addEventListener('click', () => this.saveConfig());
         document.getElementById('resetConfigBtn').addEventListener('click', () => this.resetToDefaults());
+
+        // Model controls
+        this.refreshModelsBtn.addEventListener('click', () => this.refreshModels());
+        this.modelSearch.addEventListener('input', () => this.filterModels());
+        this.toolsOnlyFilter.addEventListener('change', () => this.filterModels());
 
         // Close modal on overlay click
         this.modal.addEventListener('click', (e) => {
@@ -259,6 +267,127 @@ class ConfigManager {
                 }
             }
         }
+    }
+
+    async loadModels() {
+        try {
+            const response = await fetch('/api/models');
+            const data = await response.json();
+            
+            if (data.status === 'success') {
+                this.allModels = data.models;
+                this.filterModels();
+            } else {
+                // Fallback to default models if API fails
+                this.allModels = [
+                    { id: "deepseek/deepseek-chat-v3-0324:free", name: "DeepSeek Chat v3 (Default)", is_tool_call: true }
+                ];
+                this.filterModels();
+            }
+        } catch (error) {
+            console.warn('Failed to load models:', error);
+            // Fallback to default models
+            this.allModels = [
+                { id: "deepseek/deepseek-chat-v3-0324:free", name: "DeepSeek Chat v3 (Default)", is_tool_call: true }
+            ];
+            this.filterModels();
+        }
+    }
+
+    async refreshModels() {
+        try {
+            this.refreshModelsBtn.classList.add('loading');
+            this.refreshModelsBtn.disabled = true;
+            
+            const response = await fetch('/api/models/refresh', { method: 'POST' });
+            const data = await response.json();
+            
+            if (data.status === 'success') {
+                notifications.success(`Refreshed ${data.models_count} models (${data.tool_models_count} with tools)`);
+                await this.loadModels();
+            } else {
+                notifications.error(`Failed to refresh models: ${data.error}`);
+            }
+        } catch (error) {
+            console.error('Failed to refresh models:', error);
+            notifications.error('Failed to refresh models');
+        } finally {
+            this.refreshModelsBtn.classList.remove('loading');
+            this.refreshModelsBtn.disabled = false;
+        }
+    }
+
+    filterModels() {
+        const searchTerm = this.modelSearch.value.toLowerCase();
+        const toolsOnly = this.toolsOnlyFilter.checked;
+        
+        this.filteredModels = this.allModels.filter(model => {
+            const matchesSearch = model.name.toLowerCase().includes(searchTerm) || 
+                                model.id.toLowerCase().includes(searchTerm);
+            const matchesFilter = !toolsOnly || model.is_tool_call;
+            
+            return matchesSearch && matchesFilter;
+        });
+        
+        this.renderModelOptions();
+    }
+
+    renderModelOptions() {
+        this.modelSelect.innerHTML = '';
+        
+        if (this.filteredModels.length === 0) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No models found';
+            option.disabled = true;
+            this.modelSelect.appendChild(option);
+            return;
+        }
+        
+        this.filteredModels.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model.id;
+            
+            // Create text content with tool indicator and context length
+            const toolIndicator = model.is_tool_call ? '🔧 ' : '';
+            const contextLength = model.context_length ? this.formatContextLength(model.context_length) : '';
+            
+            if (contextLength) {
+                // Create right-aligned context length with visual separation
+                const baseName = `${toolIndicator}${model.name}`;
+                const paddingLength = Math.max(2, 45 - baseName.length - contextLength.length);
+                const padding = ' '.repeat(paddingLength);
+                option.textContent = `${baseName}${padding}(${contextLength})`;
+                option.setAttribute('data-has-context', 'true');
+            } else {
+                option.textContent = `${toolIndicator}${model.name}`;
+                option.setAttribute('data-has-context', 'false');
+            }
+            
+            this.modelSelect.appendChild(option);
+        });
+        
+        // Restore current selection if it exists in filtered models
+        const currentModel = appState.aiConfig.model;
+        if (this.filteredModels.some(m => m.id === currentModel)) {
+            this.modelSelect.value = currentModel;
+        } else if (this.filteredModels.length > 0) {
+            // Select first available model if current isn't in filtered list
+            this.modelSelect.value = this.filteredModels[0].id;
+        }
+        
+        this.updatePreview();
+    }
+
+    formatContextLength(contextLength) {
+        if (!contextLength || contextLength === 0) return '';
+        
+        if (contextLength >= 1000000) {
+            return `${Math.round(contextLength / 1000000)}M`;
+        } else if (contextLength >= 1000) {
+            return `${Math.round(contextLength / 1000)}k`;
+        }
+        return contextLength.toString();
     }
 
     resetToDefaults() {

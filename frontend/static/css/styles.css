@@ -1110,4 +1110,168 @@ body {
     font-weight: 600;
     color: var(--text-primary);
     font-family: var(--font-mono);
+}
+
+/* Model Selection Styles */
+.model-header-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+}
+
+.refresh-models-btn {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    min-height: 28px;
+    font-size: 0.75rem;
+    flex-shrink: 0;
+}
+
+.refresh-models-btn svg {
+    width: 14px;
+    height: 14px;
+}
+
+.refresh-models-btn.loading svg {
+    animation: spin 1s linear infinite;
+}
+
+.model-search {
+    flex: 1;
+    min-width: 120px;
+    margin-bottom: 0;
+}
+
+.model-select {
+    width: 100%;
+    margin-bottom: var(--spacing-md);
+    height: auto;
+    min-height: 120px;
+    max-height: 150px;
+    border-radius: 6px;
+    padding: var(--spacing-xs);
+}
+
+.model-select option {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-radius: 4px;
+    margin-bottom: 2px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+
+/* Try to style the context length part */
+.model-select option[data-has-context="true"] {
+    font-style: italic;
+}
+
+.model-select option:checked,
+.model-select option:hover {
+    background-color: var(--color-primary-light);
+    color: var(--color-primary);
+}
+
+.model-filters {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.filter-checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    font-size: 0.875rem;
+    color: var(--color-gray-700);
+    cursor: pointer;
+    user-select: none;
+}
+
+.filter-checkbox input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.checkmark {
+    position: relative;
+    width: 16px;
+    height: 16px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    transition: all var(--transition-fast);
+}
+
+.filter-checkbox input:checked ~ .checkmark {
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+}
+
+.filter-checkbox input:checked ~ .checkmark::after {
+    content: '';
+    position: absolute;
+    left: 5px;
+    top: 2px;
+    width: 4px;
+    height: 8px;
+    border: solid white;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+.tool-icon {
+    color: var(--color-primary);
+    flex-shrink: 0;
+}
+
+.model-option-with-icon {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+}
+
+.model-option-with-icon .tool-icon {
+    width: 12px;
+    height: 12px;
+}
+
+/* Responsive design for model controls */
+@media (max-width: 768px) {
+    .model-header-controls {
+        flex-direction: column;
+        align-items: stretch;
+        gap: var(--spacing-sm);
+    }
+    
+    .model-search {
+        width: 100%;
+    }
+    
+    .model-filters {
+        justify-content: center;
+    }
+    
+    .refresh-models-btn {
+        align-self: center;
+    }
+}
+
+@media (max-width: 480px) {
+    .model-header-controls {
+        gap: var(--spacing-xs);
+    }
+    
+    .model-filters .filter-checkbox {
+        font-size: 0.8rem;
+    }
+    
+    .refresh-models-btn {
+        padding: var(--spacing-xs);
+        min-height: 32px;
+    }
 } 

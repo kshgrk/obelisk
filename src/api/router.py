@@ -13,6 +13,9 @@ import json
 from collections import defaultdict, deque
 from typing import Dict, List
 import time
+import httpx
+import os
+from src.database.manager import db_manager
 
 # Create main API router
 api_router = APIRouter()
@@ -121,6 +124,75 @@ async def stream_events(session_id: str):
         }
     )
 
+# Models management endpoints
+@api_router.post("/models/refresh")
+async def refresh_models():
+    """Fetch models from OpenRouter API and update database"""
+    try:
+        # Get OpenRouter API key from environment
+        api_key = os.getenv("OPENROUTER_KEY")
+        if not api_key:
+            return {"error": "OpenRouter API key not found"}, 400
+        
+        async with httpx.AsyncClient() as client:
+            # Fetch all free models
+            response = await client.get(
+                "https://openrouter.ai/api/v1/models",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+            )
+            
+            if response.status_code != 200:
+                return {"error": "Failed to fetch models from OpenRouter"}, 500
+            
+            data = response.json()
+            models_data = []
+            
+            for model in data.get("data", []):
+                # Check if model is free (both prompt and completion pricing are "0")
+                pricing = model.get("pricing", {})
+                if pricing.get("prompt") == "0" and pricing.get("completion") == "0":
+                    # Check if model supports tools
+                    supported_params = model.get("supported_parameters", [])
+                    is_tool_call = "tools" in supported_params if supported_params else False
+                    
+                    models_data.append({
+                        "id": model["id"],
+                        "name": model["name"],
+                        "is_tool_call": is_tool_call,
+                        "context_length": model.get("context_length", 0)
+                    })
+            
+            # Save to database
+            await db_manager.save_models(models_data)
+            
+            return {
+                "status": "success",
+                "message": f"Refreshed {len(models_data)} free models",
+                "models_count": len(models_data),
+                "tool_models_count": len([m for m in models_data if m["is_tool_call"]])
+            }
+            
+    except Exception as e:
+        logger.error(f"Error refreshing models: {e}")
+        return {"error": str(e)}, 500
+
+@api_router.get("/models")
+async def get_models(tools_only: bool = False):
+    """Get models from database, optionally filtered by tool call capability"""
+    try:
+        models = await db_manager.get_models(tools_only=tools_only)
+        return {
+            "status": "success", 
+            "models": models,
+            "count": len(models)
+        }
+    except Exception as e:
+        logger.error(f"Error getting models: {e}")
+        return {"error": str(e)}, 500
+
 # Health check endpoint for the API
 @api_router.get("/health")
 async def api_health():
@@ -133,6 +205,8 @@ async def api_health():
             "/chat - Chat completions and streaming", 
             "/events/emit - Real-time event emission",
             "/events/stream/{session_id} - SSE event streaming",
+            "/models - Get models from database",
+            "/models/refresh - Refresh models from OpenRouter",
             "/health - API health check"
         ],
         "active_streams": len(active_streams),

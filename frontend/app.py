@@ -337,6 +337,28 @@ async def chat_completions(request: Request):
         print(f"Error with chat completions: {e}")
         return JSONResponse({"error": "Failed to process completion"}, status_code=500)
 
+@app.post("/api/models/refresh")
+async def refresh_models():
+    """Proxy to backend models refresh endpoint"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{BACKEND_URL}/models/refresh")
+            return response.json()
+    except Exception as e:
+        print(f"Error refreshing models: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/api/models")
+async def get_models(tools_only: bool = False):
+    """Proxy to backend models get endpoint"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{BACKEND_URL}/models", params={"tools_only": tools_only})
+            return response.json()
+    except Exception as e:
+        print(f"Error getting models: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 @app.get("/health")
 async def health():
     return {"status": "healthy", "frontend": "with_backend_integration"}

@@ -197,12 +197,28 @@
                 <div class="config-section">
                     <h4 class="config-section-title">Model Selection</h4>
                     <div class="config-group">
-                        <label class="config-label">AI Model</label>
-                        <select class="config-select" id="modelSelect">
-                            <option value="qwen/qwen3-235b-a22b:free">Qwen 3.2 235B (Free)</option>
-                            <option value="deepseek/deepseek-r1-0528:free">DeepSeek R1 (Free)</option>
-                            <option value="mistralai/mistral-small-3.2-24b-instruct:free">Mistral Small 3.2 (Free)</option>
-                            <option value="deepseek/deepseek-chat-v3-0324:free" selected>DeepSeek Chat v3 (Default)</option>
+                        <div class="model-header-controls">
+                            <input type="text" class="config-input model-search" id="modelSearch" placeholder="Search models...">
+                            <div class="model-filters">
+                                <label class="filter-checkbox">
+                                    <input type="checkbox" id="toolsOnlyFilter">
+                                    <span class="checkmark"></span>
+                                    <svg class="tool-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                                    </svg>
+                                    Tools only
+                                </label>
+                            </div>
+                            <button class="btn btn-ghost refresh-models-btn" id="refreshModelsBtn" title="Refresh Models">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c2.39 0 4.584.926 6.207 2.438L21 8"/>
+                                    <path d="M21 3v5h-5"/>
+                                </svg>
+                            </button>
+                        </div>
+                        
+                        <select class="config-select model-select" id="modelSelect" size="6">
+                            <option value="">Loading models...</option>
                         </select>
                         <p class="config-description">Choose the AI model for your conversations. Different models have varying capabilities and response styles.</p>
                     </div>
