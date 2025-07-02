@@ -478,6 +478,19 @@ class APIClient {
             body: JSON.stringify(requestData)
         });
     }
+
+    async deleteSession(sessionId) {
+        return this.request(`${API_CONFIG.ENDPOINTS.SESSIONS}/${sessionId}`, {
+            method: 'DELETE'
+        });
+    }
+
+    async updateSessionName(sessionId, name) {
+        return this.request(`${API_CONFIG.ENDPOINTS.SESSIONS}/${sessionId}/name`, {
+            method: 'PATCH',
+            body: JSON.stringify({ name: name })
+        });
+    }
 }
 
 const apiClient = new APIClient();
@@ -552,16 +565,23 @@ class SessionManager {
                 <div class="session-item-header">
                     <div class="session-item-title" title="${session.name || session.id}">
                         ${session.name || `Session ${session.id.substring(0, 8)}`}
+        </div>
+                    <div class="session-actions">
+                        <span class="session-status ${statusClass}">${statusClass}</span>
+                        <button class="session-delete-btn" title="Delete session" onclick="sessionManager.deleteSession('${session.id}', event)">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14zM10 11v6M14 11v6"/>
+                            </svg>
+                        </button>
                     </div>
-                    <span class="session-status ${statusClass}">${statusClass}</span>
                 </div>
                 <div class="session-item-meta">
                     <span class="message-count">${messageCount} messages</span>
                     ${turnCount > 0 ? `<span class="turn-count">${turnCount} turns</span>` : ''}
                     <span class="session-date">${createdAt}</span>
                 </div>
-            </div>
-        `;
+        </div>
+    `;
     }
 
     attachSessionEventListeners() {
@@ -811,7 +831,7 @@ class SessionManager {
             
             notifications.success('New session created successfully');
         
-        } catch (error) {
+    } catch (error) {
             console.error('Failed to create session:', error);
             notifications.error(`Failed to create session: ${error.message}`);
         }
@@ -822,6 +842,54 @@ class SessionManager {
             dom.elements.chatMessages.scrollTop = dom.elements.chatMessages.scrollHeight;
         }
     }
+
+    async deleteSession(sessionId, event) {
+        // Prevent the session click event from firing
+        if (event) {
+            event.stopPropagation();
+        }
+
+        // Confirm deletion
+        const sessionName = appState.sessions.find(s => s.id === sessionId)?.name || sessionId.substring(0, 8);
+        if (!confirm(`Are you sure you want to delete "${sessionName}"? This action cannot be undone.`)) {
+            return;
+        }
+
+        try {
+            // Call the API to delete the session
+            await apiClient.deleteSession(sessionId);
+            
+            // Remove from local state
+            appState.sessions = appState.sessions.filter(s => s.id !== sessionId);
+            
+            // If this was the current session, clear it
+            if (appState.currentSessionId === sessionId) {
+                appState.setCurrentSession(null);
+                
+                // Load another session if available, or show welcome screen
+                if (appState.sessions.length > 0) {
+                    await this.loadSession(appState.sessions[0].id);
+                } else {
+                    // Show welcome screen
+                    dom.showElement(dom.elements.welcomeScreen);
+                    dom.setElementHTML(dom.elements.chatMessages, '');
+                    dom.setElementText(dom.elements.sessionTitle, 'No Session Selected');
+                    dom.setElementHTML(dom.elements.sessionMetadata, '');
+                    this.disableChatInput();
+                }
+            }
+            
+            // Re-render sessions list
+            this.renderSessions();
+            this.updatePagination();
+            
+            notifications.success(`Session "${sessionName}" deleted successfully`);
+            
+        } catch (error) {
+            console.error('Failed to delete session:', error);
+            notifications.error(`Failed to delete session: ${error.message}`);
+        }
+    }
 }
 
 const sessionManager = new SessionManager();
@@ -830,9 +898,9 @@ const sessionManager = new SessionManager();
 class ChatManager {
     async sendMessage(message) {
         if (!appState.currentSessionId || !message.trim()) {
-            return;
-        }
-        
+        return;
+    }
+    
         try {
             // Add user message to UI immediately
             this.addUserMessage(message);
@@ -867,7 +935,30 @@ class ChatManager {
             const sessionData = await apiClient.getSession(appState.currentSessionId);
             sessionManager.updateSessionHeader(sessionData);
             
-            // Refresh sessions list to update message count
+            // Update session name in local state if it changed
+            const sessionInList = appState.sessions.find(s => s.id === appState.currentSessionId);
+            if (sessionInList && sessionData.session_data?.metadata?.name) {
+                const newName = sessionData.session_data.metadata.name;
+                if (sessionInList.name !== newName) {
+                    sessionInList.name = newName;
+                    sessionManager.renderSessions(); // Re-render to show updated name
+                    notifications.success(`Session renamed to "${newName}"`);
+                    
+                    // Only reload sessions if the message count has changed significantly
+                    // This reduces unnecessary API calls while still keeping the UI updated
+                    const currentMessageCount = sessionData.message_count || 0;
+                    const localMessageCount = sessionInList.message_count || 0;
+                    
+                    if (Math.abs(currentMessageCount - localMessageCount) > 0) {
+                        // Update local message count
+                        sessionInList.message_count = currentMessageCount;
+                        sessionManager.renderSessions(); // Re-render to show updated count
+                    }
+                    return; // Skip the sessions list reload since we updated locally
+                }
+            }
+            
+            // Only reload sessions list if session name didn't change (to update message count)
             await sessionManager.loadSessions(appState.pagination.page);
         } catch (error) {
             console.warn('Failed to refresh session data:', error);
@@ -926,8 +1017,8 @@ class ChatManager {
                         }
                     }
                 }
-            }
-        } catch (error) {
+        }
+    } catch (error) {
             console.error('Streaming error:', error);
             this.showStreamingError(assistantMessage.id, error.message);
         }
@@ -1114,7 +1205,7 @@ function setupEventHandlers() {
 
     // Chat form
     dom.elements.chatForm?.addEventListener('submit', async (e) => {
-        e.preventDefault();
+                e.preventDefault();
         const message = dom.elements.messageInput?.value.trim();
         if (message) {
             await chatManager.sendMessage(message);

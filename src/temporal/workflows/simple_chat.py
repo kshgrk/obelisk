@@ -140,7 +140,7 @@ class SimpleChatWorkflow:
             # Build conversation turn with EXPLICIT field-by-field ordering
             self.current_turn = {}
             self.current_turn["turn_id"] = turn_id
-            self.current_turn["turn_number"] = 1  # Will be set correctly when saved to database
+            # Note: turn_number will be set correctly by the database activity
             
             # USER MESSAGE FIRST (logical conversation flow)
             self.current_turn["user_message"] = {}
@@ -189,6 +189,32 @@ class SimpleChatWorkflow:
                 start_to_close_timeout=timedelta(seconds=10),
                 retry_policy=retry_policy,
             )
+            
+            # Step 6: Generate session name if this is the first message
+            # Check if this is the first turn (turn_number will be 1 for first message)
+            if saved_turn.get("turn_number") == 1:
+                try:
+                    # Generate session name based on user's first message
+                    session_name = await workflow.execute_activity(
+                        "generate_session_name",
+                        args=[user_message],
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=retry_policy,
+                    )
+                    
+                    # Update session name via API
+                    await workflow.execute_activity(
+                        "update_session_name_via_api",
+                        args=[session_id, session_name],
+                        start_to_close_timeout=timedelta(seconds=10),
+                        retry_policy=retry_policy,
+                    )
+                    
+                    workflow.logger.info(f"Generated session name '{session_name}' for session {session_id}")
+                    
+                except Exception as e:
+                    workflow.logger.warning(f"Failed to generate session name for {session_id}: {e}")
+                    # Continue without failing the entire workflow
             
             workflow.logger.info(f"Successfully processed turn {turn_id} for session {session_id}")
             

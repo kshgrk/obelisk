@@ -10,6 +10,7 @@ from temporalio.worker import Worker
 from src.temporal.workflows.simple_chat import SimpleChatWorkflow, SimpleStreamingChatWorkflow, ChatSessionWorkflow
 from src.temporal.activities.database import DatabaseActivities
 from src.temporal.activities.openrouter import OpenRouterActivities
+from src.temporal.activities.session import generate_session_name, update_session_name_in_db, update_session_name_via_api
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -49,6 +50,11 @@ async def start_optimized_chat_worker():
                 OpenRouterActivities.stream_chat,
                 OpenRouterActivities.health_check,
                 OpenRouterActivities.get_models,
+                
+                # Session activities
+                generate_session_name,
+                update_session_name_in_db,
+                update_session_name_via_api,
             ],
         )
         

@@ -28,6 +28,14 @@ class OpenRouterSettings(BaseModel):
     timeout: int = Field(default=60)
 
 
+class MistralSettings(BaseModel):
+    """Mistral AI API configuration"""
+    api_key: str = Field(default="")
+    base_url: str = Field(default="https://api.mistral.ai/v1")
+    model: str = Field(default="mistral-small-latest")
+    timeout: int = Field(default=30)
+
+
 class TemporalSettings(BaseModel):
     """Temporal workflow configuration"""
     server_url: str = Field(default="localhost:7233")
@@ -71,6 +79,7 @@ class Settings(BaseModel):
     # Sub-configurations
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     openrouter: OpenRouterSettings = Field(default_factory=OpenRouterSettings)
+    mistral: MistralSettings = Field(default_factory=MistralSettings)
     temporal: TemporalSettings = Field(default_factory=TemporalSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
@@ -92,6 +101,12 @@ class Settings(BaseModel):
                 "temperature": float(os.getenv("OPENROUTER_TEMPERATURE", "0.7")),
                 "max_tokens": int(os.getenv("OPENROUTER_MAX_TOKENS", "1000")),
                 "timeout": int(os.getenv("OPENROUTER_TIMEOUT", "60")),
+            },
+            "mistral": {
+                "api_key": os.getenv("MISTRAL_API_KEY", ""),
+                "base_url": os.getenv("MISTRAL_BASE_URL", "https://api.mistral.ai/v1"),
+                "model": os.getenv("MISTRAL_MODEL", "mistral-small-latest"),
+                "timeout": int(os.getenv("MISTRAL_TIMEOUT", "30")),
             },
             "temporal": {
                 "server_url": os.getenv("TEMPORAL_SERVER_URL", "localhost:7233"),
@@ -128,6 +143,15 @@ class Settings(BaseModel):
         
         super().__init__(**env_data, **kwargs)
 
+    @property
+    def mistral_api_key(self) -> str:
+        """Get Mistral API key"""
+        return self.mistral.api_key
+
 
 # Global settings instance
-settings = Settings() 
+settings = Settings()
+
+def get_settings() -> Settings:
+    """Get the global settings instance"""
+    return settings 

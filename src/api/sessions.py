@@ -15,10 +15,14 @@ from src.models.chat import (
     SessionHistoryResponse,
     ChatSessionCreate
 )
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+class SessionNameUpdate(BaseModel):
+    name: str
 
 async def get_db_manager() -> DatabaseManager:
     """Dependency to get database manager instance"""
@@ -115,6 +119,7 @@ async def get_session_conversation_history(
         }
         
         # Look for the most recent generation_config in conversation history
+        generation_config = {}  # Initialize the variable
         if conversation_history and conversation_history.get("conversation_turns"):
             turns = conversation_history["conversation_turns"]
             # Search from most recent turn backwards
@@ -123,9 +128,10 @@ async def get_session_conversation_history(
                 for response in assistant_responses:
                     if response.get("is_active", True):
                         metadata = response.get("metadata", {})
-                        generation_config = metadata.get("generation_config", {})
-                        if generation_config:
+                        found_config = metadata.get("generation_config", {})
+                        if found_config:
                             # Found a generation config, use it as the latest
+                            generation_config = found_config
                             latest_config.update(generation_config)
                             break
                 if generation_config:  # Break outer loop if we found config
@@ -177,8 +183,19 @@ async def create_new_session(
         
         # If no name was provided, update the session to use ID as name
         if not session_data.name:
-            # Update the session name to be the session ID
-            session.name = session.id
+            # Update the session name to be a more friendly format
+            session_name = f"Chat Session {session.id[:8]}"
+            
+            # Update the session in the database with the new name
+            async with db.get_connection() as connection:
+                await connection.execute(
+                    "UPDATE sessions SET name = ?, updated_at = ? WHERE session_id = ?",
+                    (session_name, datetime.utcnow().isoformat(), session.id)
+                )
+                await connection.commit()
+            
+            # Update the returned session object
+            session.name = session_name
             
         return session
         
@@ -189,4 +206,112 @@ async def create_new_session(
             detail=f"Failed to create session: {str(e)}"
         )
 
-# Removed redundant get_session_context endpoint - use GET /sessions/{id} instead 
+# Removed redundant get_session_context endpoint - use GET /sessions/{id} instead
+
+
+@router.delete("/{session_id}")
+async def delete_session(
+    session_id: str,
+    db: DatabaseManager = Depends(get_db_manager)
+):
+    """Delete a session and all its conversation history"""
+    try:
+        # Check if session exists
+        async with db.get_connection() as connection:
+            cursor = await connection.execute(
+                "SELECT session_id FROM sessions WHERE session_id = ?",
+                (session_id,)
+            )
+            row = await cursor.fetchone()
+            
+            if not row:
+                raise HTTPException(status_code=404, detail="Session not found")
+            
+            # Delete messages first (due to foreign key constraint)
+            await connection.execute(
+                "DELETE FROM messages WHERE session_id = ?",
+                (session_id,)
+            )
+            
+            # Delete the session
+            await connection.execute(
+                "DELETE FROM sessions WHERE session_id = ?",
+                (session_id,)
+            )
+            
+            await connection.commit()
+            
+        logger.info(f"Deleted session {session_id}")
+        return {"message": "Session deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.patch("/{session_id}/name")
+async def update_session_name(
+    session_id: str,
+    name_update: SessionNameUpdate,
+    db: DatabaseManager = Depends(get_db_manager)
+):
+    """Update the name of a session"""
+    try:
+        # Check if session exists and get current data
+        async with db.get_connection() as connection:
+            cursor = await connection.execute(
+                "SELECT session_data FROM sessions WHERE session_id = ?",
+                (session_id,)
+            )
+            row = await cursor.fetchone()
+            
+            if not row:
+                raise HTTPException(status_code=404, detail="Session not found")
+            
+            # Parse existing session data or create new structure
+            if row['session_data']:
+                session_data = json.loads(row['session_data'])
+            else:
+                session_data = {
+                    "config": {
+                        "model": "deepseek/deepseek-chat-v3-0324:free",
+                        "temperature": 1.0,
+                        "max_tokens": 5000,
+                        "streaming": True,
+                        "show_tool_calls": True
+                    },
+                    "statistics": {
+                        "total_tokens_input": 0,
+                        "total_tokens_output": 0,
+                        "last_response_time_ms": 0.0,
+                        "average_response_time_ms": 0.0,
+                        "total_response_time_ms": 0.0
+                    },
+                    "metadata": {}
+                }
+            
+            # Ensure metadata section exists
+            if "metadata" not in session_data:
+                session_data["metadata"] = {}
+            
+            # Update the session name in metadata
+            session_data["metadata"]["name"] = name_update.name
+            
+            # Update both the main session name field AND the session_data
+            await connection.execute(
+                "UPDATE sessions SET name = ?, session_data = ?, updated_at = ? WHERE session_id = ?",
+                (name_update.name, json.dumps(session_data), datetime.utcnow().isoformat(), session_id)
+            )
+            
+            await connection.commit()
+            
+        logger.info(f"Updated session {session_id} name to: {name_update.name}")
+        return {"message": "Session name updated successfully", "name": name_update.name}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating session name for {session_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error") 

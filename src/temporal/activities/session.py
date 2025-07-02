@@ -3,14 +3,16 @@ Session Management Activities for Temporal Workflows
 These activities handle session-specific operations like monitoring, cleanup, and lifecycle management.
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
+import json
+import httpx
 
 from temporalio import activity
 
 from src.database.manager import db_manager
 from src.models.chat import SessionStatus
-from src.config.settings import settings
+from src.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +37,7 @@ class SessionActivities:
             threshold = datetime.utcnow() - timedelta(hours=timeout_hours)
             
             # Check if last update was before threshold
-            is_inactive = session.updated_at < threshold
+            is_inactive = session.updated_at < threshold if session.updated_at else False
             
             if is_inactive:
                 activity.logger.info(f"Session {session_id} is inactive (last update: {session.updated_at})")
@@ -62,7 +64,7 @@ class SessionActivities:
             
             cleanup_results = {
                 "session_id": session_id,
-                "cleanup_time": datetime.utcnow().isoformat(),
+                "cleanup_time": datetime.now(timezone.utc).isoformat(),
                 "operations_performed": [],
                 "errors": []
             }
@@ -96,7 +98,7 @@ class SessionActivities:
             return {
                 "session_id": session_id,
                 "error": str(e),
-                "cleanup_time": datetime.utcnow().isoformat()
+                "cleanup_time": datetime.now(timezone.utc).isoformat()
             }
     
     @staticmethod
@@ -112,16 +114,17 @@ class SessionActivities:
                 return {"error": "Session not found", "session_id": session_id}
             
             # Calculate session duration
-            session_duration = datetime.utcnow() - session.created_at
+            session_duration = datetime.now(timezone.utc) - session.created_at if session.created_at else timedelta(0)
+            # End of Selection
             
             completion_log = {
                 "session_id": session_id,
-                "completion_time": datetime.utcnow().isoformat(),
+                "completion_time": datetime.now(timezone.utc).isoformat(),
                 "session_duration_seconds": session_duration.total_seconds(),
                 "total_messages": session.message_count,
                 "session_status": session.status.value,
-                "created_at": session.created_at.isoformat(),
-                "updated_at": session.updated_at.isoformat()
+                "created_at": session.created_at.isoformat() if session.created_at else None,
+                "updated_at": session.updated_at.isoformat() if session.updated_at else None
             }
             
             activity.logger.info(f"Session {session_id} completed: {session.message_count} messages, "
@@ -134,7 +137,7 @@ class SessionActivities:
             return {
                 "session_id": session_id,
                 "error": str(e),
-                "completion_time": datetime.utcnow().isoformat()
+                "completion_time": datetime.now(timezone.utc).isoformat()
             }
     
     @staticmethod
@@ -150,16 +153,29 @@ class SessionActivities:
                 return {"error": "Session not found", "session_id": session_id}
             
             # Get recent message activity
-            recent_messages = await db_manager.get_session_history(session_id, offset=0, limit=10)
+            conversation_history = await db_manager.get_conversation_history(session_id)
+            recent_messages = conversation_history.get('conversation_turns', [])
             
             # Calculate metrics
-            session_age = datetime.utcnow() - session.created_at
-            last_activity = datetime.utcnow() - session.updated_at
+            session_age = datetime.now(timezone.utc) - session.created_at if session.created_at else timedelta(0)
+            last_activity = datetime.now(timezone.utc) - session.updated_at if session.updated_at else timedelta(0)
             
             avg_message_length = 0
             if recent_messages:
-                total_length = sum(len(msg.content) for msg in recent_messages)
-                avg_message_length = total_length / len(recent_messages)
+                # Calculate average message length from conversation turns
+                total_length = 0
+                message_count = 0
+                for turn in recent_messages[-10:]:  # Last 10 turns
+                    if 'user_message' in turn:
+                        total_length += len(turn['user_message'].get('content', ''))
+                        message_count += 1
+                    for response in turn.get('assistant_responses', []):
+                        if response.get('is_active', True):
+                            total_length += len(response.get('content', ''))
+                            message_count += 1
+                            break
+                if message_count > 0:
+                    avg_message_length = total_length / message_count
             
             metrics = {
                 "session_id": session_id,
@@ -193,14 +209,14 @@ class SessionActivities:
             
             # Get active sessions ordered by last update (oldest first)
             sessions = await db_manager.list_sessions(
-                status=None,  # Get all sessions
                 offset=0,
                 limit=max_sessions * 2  # Get more to filter
             )
             
             archived_count = 0
             errors = []
-            cutoff_time = datetime.utcnow() - timedelta(hours=settings.chat.session_timeout_hours * 2)
+            settings = get_settings()
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=settings.chat.session_timeout_hours * 2)
             
             for session in sessions:
                 if archived_count >= max_sessions:
@@ -208,12 +224,18 @@ class SessionActivities:
                 
                 # Check if session should be archived
                 if (session.status.value == "active" and 
-                    session.updated_at < cutoff_time and 
+                    session.updated_at and session.updated_at < cutoff_time and 
                     session.message_count > 0):
                     
                     try:
-                        # Archive the session
-                        await db_manager.update_session_status(session.id, SessionStatus.ARCHIVED)
+                        # Archive the session by updating status directly in database
+                        async with db_manager.get_connection() as connection:
+                            await connection.execute(
+                                "UPDATE sessions SET status = ?, updated_at = ? WHERE session_id = ?",
+                                (SessionStatus.ARCHIVED.value, datetime.now(timezone.utc).isoformat(), session.id)
+                            )
+                            await connection.commit()
+                        
                         archived_count += 1
                         activity.logger.debug(f"Archived session: {session.id}")
                         
@@ -261,17 +283,19 @@ class SessionActivities:
             }
             
             # Check 1: Message count consistency
-            actual_messages = await db_manager.get_session_history(session_id, offset=0, limit=10000)
-            if len(actual_messages) != session.message_count:
+            conversation_history = await db_manager.get_conversation_history(session_id)
+            actual_turns = conversation_history.get('conversation_turns', [])
+            if len(actual_turns) != session.message_count:
                 validation_results["issues_found"].append(
                     f"Message count mismatch: session shows {session.message_count}, "
-                    f"actual count is {len(actual_messages)}"
+                    f"actual turn count is {len(actual_turns)}"
                 )
                 validation_results["valid"] = False
             validation_results["checks_performed"].append("message_count_consistency")
             
             # Check 2: Timestamp consistency
-            if session.updated_at < session.created_at:
+            if (session.updated_at is not None and session.created_at is not None and 
+                session.updated_at < session.created_at):
                 validation_results["issues_found"].append("Updated timestamp is before created timestamp")
                 validation_results["valid"] = False
             validation_results["checks_performed"].append("timestamp_consistency")
@@ -294,4 +318,189 @@ class SessionActivities:
                 "session_id": session_id,
                 "valid": False,
                 "error": str(e)
-            } 
+            }
+
+@activity.defn
+async def generate_session_name(user_message: str) -> str:
+    """
+    Generate a concise session name based on the user's first message using Mistral AI via OpenRouter
+    
+    Args:
+        user_message: The first message from the user
+        
+    Returns:
+        Generated session name (max 50 characters)
+    """
+    try:
+        from src.temporal.activities.openrouter import OpenRouterActivities
+        
+        # Prepare the prompt for Mistral to generate a session name
+        system_prompt = """You are an assistant that creates concise, descriptive titles for chat sessions. 
+        Given a user's first message, generate a short, clear title (maximum 50 characters) that captures the main topic or intent.
+        
+        Rules:
+        - Maximum 50 characters
+        - No quotes or special formatting
+        - Descriptive but concise
+        - Professional tone
+        - Focus on the main topic/intent
+        
+        Examples:
+        User: "How do I deploy a Python app to AWS?"
+        Title: "Python AWS Deployment Guide"
+        
+        User: "I need help with React state management"
+        Title: "React State Management Help"
+        
+        User: "What's the weather like today?"
+        Title: "Weather Inquiry"
+        """
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Generate a title for this message: {user_message}"}
+        ]
+        
+        # Use OpenRouter with Mistral model via Temporal activity
+        try:
+            request_data = {
+                "messages": messages,
+                "model": "mistralai/mistral-small-3.2-24b-instruct:free",
+                "max_tokens": 20,  # Keep it short
+                "temperature": 0.3,  # Lower temperature for more consistent naming
+                "stream": False
+            }
+            
+            result = await OpenRouterActivities.chat_completion(request_data)
+            
+            if result.get("content"):
+                generated_name = result["content"].strip()
+                
+                # Clean up the generated name
+                # Remove quotes if present
+                generated_name = generated_name.strip('"\'')
+                
+                # Ensure it's not too long
+                if len(generated_name) > 50:
+                    generated_name = generated_name[:47] + "..."
+                
+                logger.info(f"Generated session name via OpenRouter: {generated_name}")
+                return generated_name
+            else:
+                logger.error(f"OpenRouter activity failed: No content in response")
+                # Fallback to simple name generation
+                words = user_message.strip().split()[:4]
+                return " ".join(words)[:50] if words else "New Chat"
+                
+        except Exception as e:
+            logger.error(f"Error calling OpenRouter activity for session naming: {e}")
+            # Fallback to simple name generation
+            words = user_message.strip().split()[:4]
+            return " ".join(words)[:50] if words else "New Chat"
+                
+    except Exception as e:
+        logger.error(f"Error generating session name: {e}")
+        # Fallback to simple name generation
+        words = user_message.strip().split()[:4]
+        return " ".join(words)[:50] if words else "New Chat"
+
+
+@activity.defn
+async def update_session_name_via_api(session_id: str, session_name: str) -> Dict[str, Any]:
+    """
+    Update the session name via the API endpoint
+    
+    Args:
+        session_id: The session ID to update
+        session_name: The new session name
+        
+    Returns:
+        Dictionary with success status and details
+    """
+    try:
+        import httpx
+        from src.config.settings import get_settings
+        
+        settings = get_settings()
+        
+        # Call the API endpoint to update session name
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.patch(
+                f"http://{settings.server.host}:{settings.server.port}/sessions/{session_id}/name",
+                json={"name": session_name},
+                headers={"Content-Type": "application/json"}
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"Updated session {session_id} name via API: {session_name}")
+                return {"success": True, "session_name": session_name, "api_response": result}
+            else:
+                logger.error(f"API error updating session name: {response.status_code} - {response.text}")
+                return {"success": False, "error": f"API error: {response.status_code}"}
+                
+    except Exception as e:
+        logger.error(f"Error updating session name via API: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@activity.defn
+async def update_session_name_in_db(session_id: str, session_name: str) -> Dict[str, Any]:
+    """
+    Update the session name in the database
+    
+    Args:
+        session_id: The session ID to update
+        session_name: The new session name
+        
+    Returns:
+        Dictionary with success status and details
+    """
+    try:
+        from src.database.manager import db_manager
+        
+        # Ensure database is initialized
+        await db_manager.initialize()
+        
+        # Get current session data
+        async with db_manager.get_connection() as connection:
+            cursor = await connection.execute(
+                "SELECT session_data FROM sessions WHERE session_id = ?",
+                (session_id,)
+            )
+            row = await cursor.fetchone()
+            
+            if not row:
+                return {"success": False, "error": "Session not found"}
+            
+            # Parse existing session data or create new structure
+            if row['session_data']:
+                session_data = json.loads(row['session_data'])
+            else:
+                session_data = {
+                    "config": {},
+                    "statistics": {},
+                    "metadata": {}
+                }
+            
+            # Ensure metadata exists
+            if "metadata" not in session_data:
+                session_data["metadata"] = {}
+            
+            # Update the session name in metadata
+            session_data["metadata"]["name"] = session_name
+            
+            # Update the session in database
+            await connection.execute(
+                "UPDATE sessions SET session_data = ? WHERE session_id = ?",
+                (json.dumps(session_data), session_id)
+            )
+            
+            await connection.commit()
+            
+        logger.info(f"Updated session {session_id} name to: {session_name}")
+        return {"success": True, "session_name": session_name}
+        
+    except Exception as e:
+        logger.error(f"Error updating session name in database: {e}")
+        return {"success": False, "error": str(e)} 
