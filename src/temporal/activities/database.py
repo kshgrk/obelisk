@@ -100,9 +100,9 @@ class DatabaseActivities:
             async with db_manager.get_connection() as db:
                 await db.execute("BEGIN")
                 try:
-                    # Get current metadata
+                    # Get current session data
                     cursor = await db.execute(
-                        "SELECT session_metadata FROM sessions WHERE session_id = ?",
+                        "SELECT session_data FROM sessions WHERE session_id = ?",
                         (session_id,)
                     )
                     row = await cursor.fetchone()
@@ -110,15 +110,19 @@ class DatabaseActivities:
                     if not row:
                         return False
                     
-                    # Update metadata
-                    current_metadata = json.loads(row['session_metadata'])
+                    # Update session data structure
+                    current_session_data = json.loads(row['session_data']) if row['session_data'] else {}
+                    current_metadata = current_session_data.get('metadata', {})
                     current_metadata.update(metadata_updates)
                     current_metadata['last_updated'] = datetime.utcnow().isoformat()
                     
-                    # Save updated metadata
+                    # Update session_data with new metadata
+                    current_session_data['metadata'] = current_metadata
+                    
+                    # Save updated session data
                     await db.execute(
-                        "UPDATE sessions SET session_metadata = ?, updated_at = ? WHERE session_id = ?",
-                        (json.dumps(current_metadata), datetime.utcnow().isoformat(), session_id)
+                        "UPDATE sessions SET session_data = ?, updated_at = ? WHERE session_id = ?",
+                        (json.dumps(current_session_data), datetime.utcnow().isoformat(), session_id)
                     )
                     
                     await db.commit()

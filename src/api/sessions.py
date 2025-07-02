@@ -6,6 +6,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query, Depends
 from datetime import datetime
 import logging
+import json
 
 from src.database.manager import DatabaseManager, db_manager
 from src.models.chat import (
@@ -68,7 +69,7 @@ async def get_session_conversation_history(
     Get full conversation history for a specific session
     
     Returns the complete conversation history including all turns and messages
-    in the optimized JSON format from the database
+    plus the full session data (config, statistics, metadata) in the optimized JSON format
     """
     try:
         # First check if session exists
@@ -82,6 +83,57 @@ async def get_session_conversation_history(
         # Get the full conversation history
         conversation_history = await db.get_conversation_history(session_id)
         
+        # Get the full session data from database directly
+        async with db.get_connection() as connection:
+            cursor = await connection.execute(
+                "SELECT session_data FROM sessions WHERE session_id = ?",
+                (session_id,)
+            )
+            row = await cursor.fetchone()
+            
+            if row and row['session_data']:
+                session_data = json.loads(row['session_data'])
+            else:
+                session_data = {
+                    "statistics": {
+                        "total_tokens_input": 0,
+                        "total_tokens_output": 0,
+                        "last_response_time_ms": 0.0,
+                        "average_response_time_ms": 0.0,
+                        "total_response_time_ms": 0.0
+                    },
+                    "metadata": session.metadata
+                }
+        
+        # Extract the latest config from the most recent conversation turn
+        latest_config = {
+            "model": "deepseek/deepseek-chat-v3-0324:free",
+            "temperature": 1.0,
+            "max_tokens": 5000,
+            "streaming": True,
+            "show_tool_calls": True
+        }
+        
+        # Look for the most recent generation_config in conversation history
+        if conversation_history and conversation_history.get("conversation_turns"):
+            turns = conversation_history["conversation_turns"]
+            # Search from most recent turn backwards
+            for turn in reversed(turns):
+                assistant_responses = turn.get("assistant_responses", [])
+                for response in assistant_responses:
+                    if response.get("is_active", True):
+                        metadata = response.get("metadata", {})
+                        generation_config = metadata.get("generation_config", {})
+                        if generation_config:
+                            # Found a generation config, use it as the latest
+                            latest_config.update(generation_config)
+                            break
+                if generation_config:  # Break outer loop if we found config
+                    break
+        
+        # Set the config in session_data
+        session_data["config"] = latest_config
+        
         # Return combined session info and conversation history
         return {
             "session_id": session.id,
@@ -90,7 +142,7 @@ async def get_session_conversation_history(
             "created_at": session.created_at.isoformat() if session.created_at else None,
             "updated_at": session.updated_at.isoformat() if session.updated_at else None,
             "message_count": session.message_count,
-            "metadata": session.metadata,
+            "session_data": session_data,
             "conversation_history": conversation_history
         }
         

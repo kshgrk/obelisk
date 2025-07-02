@@ -1,922 +1,1226 @@
-// Main JavaScript file for Obelisk Chat
-// Handles session management and chat functionality with direct streaming
+// Obelisk Chat Platform - Main Application Controller
+// Handles session management, chat functionality, and real-time streaming
 
-// API Configuration
-const API_BASE_URL = '';
-const BACKEND_API_URL = 'http://localhost:8001'; // Direct backend connection for streaming
+// Configuration
+const API_CONFIG = {
+    BASE_URL: 'http://localhost:8001',
+    BACKEND_URL: 'http://localhost:8001',
+    ENDPOINTS: {
+        SESSIONS: '/sessions',
+        CHAT: '/chat',
+        EVENTS: '/events'
+    }
+};
 
 // Application State
-let currentSessionId = null;
-let sessions = [];
-let isLoading = false;
-// SSE connection removed - now using direct streaming
-let currentStreamingMessage = null;
-
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('Obelisk Chat initialized');
-    console.log('Backend API URL:', BACKEND_API_URL);
-    console.log('Frontend API URL:', API_BASE_URL || 'relative paths');
-    
-    // Load sessions on startup
-    loadSessions();
-    
-    // Set up event handlers
-    setupEventHandlers();
-    
-    // Test backend connectivity
-    testBackendConnection();
-});
-
-// === Direct Streaming Functions ===
-// SSE removed - now using direct streaming from /chat endpoint
-
-// Old SSE event handling removed - now handled directly in streaming response
-
-/**
- * Start a new streaming message
- */
-function startStreamingMessage(data) {
-    console.log('🚀 Starting streaming message for session:', currentSessionId);
-    
-    // Create a new assistant message with streaming indicator
-    const messageId = `streaming-${Date.now()}`;
-    currentStreamingMessage = {
-        id: messageId,
-        type: 'assistant',
-        content: '',
-        isStreaming: true,
-        timestamp: new Date()
-    };
-    
-    console.log('Created streaming message object:', currentStreamingMessage);
-    
-    // Add the streaming message to the chat
-    addStreamingMessageToChat(currentStreamingMessage);
-    
-    console.log('Streaming message added to chat UI');
-}
-
-/**
- * Update streaming message with new content
- */
-function updateStreamingMessage(data) {
-    if (!currentStreamingMessage) {
-        console.warn('Received streaming content but no active streaming message');
-        return;
+class AppState {
+    constructor() {
+        this.currentSessionId = null;
+        this.sessions = [];
+        this.isLoading = false;
+        this.currentStreamingMessage = null;
+        this.pagination = {
+            page: 1,
+            pageSize: 50,
+            total: 0
+        };
+        this.aiConfig = {
+            model: "deepseek/deepseek-chat-v3-0324:free",
+            temperature: 1.0,
+            max_tokens: 5000,
+            streaming: true,
+            show_tool_calls: true
+        };
     }
-    
-    // Append new content - extract from data.data.content based on backend event structure
-    const content = data.data?.content || data.content; // Support both structures
-    if (content) {
-        console.log(`📝 Streaming content: "${content}" (length: ${content.length})`);
-        currentStreamingMessage.content += content;
-        
-        // Update the message element in real-time
-        const messageElement = document.querySelector(`[data-message-id="${currentStreamingMessage.id}"] .message-content`);
-        if (messageElement) {
-            messageElement.innerHTML = formatMessageContent(currentStreamingMessage.content, 'assistant') + '<span class="streaming-cursor">▊</span>';
+
+    setCurrentSession(sessionId) {
+        this.currentSessionId = sessionId;
+        this.saveState();
+    }
+
+    setSessions(sessions, pagination = {}) {
+        this.sessions = sessions;
+        this.pagination = { ...this.pagination, ...pagination };
+        this.saveState();
+    }
+
+    saveState() {
+        try {
+            localStorage.setItem('obelisk_state', JSON.stringify({
+                version: '1.1', // Added version for config migration
+                currentSessionId: this.currentSessionId,
+                pagination: this.pagination,
+                aiConfig: this.aiConfig
+            }));
+        } catch (error) {
+            console.warn('Failed to save application state:', error);
         }
-        
-        // Auto-scroll to bottom
-        scrollToBottom();
-    }
-}
-
-/**
- * Complete streaming message
- */
-function completeStreamingMessage(data) {
-    if (!currentStreamingMessage) {
-        console.warn('Received completion but no active streaming message');
-        return;
-    }
-    
-    console.log('Completing streaming message');
-    
-    // Update with final content if provided - extract from data.data.content based on backend event structure
-    const finalContent = data.data?.content || data.content; // Support both structures
-    if (finalContent) {
-        currentStreamingMessage.content = finalContent;
-    }
-    
-    // Remove streaming cursor and mark as complete
-    const messageElement = document.querySelector(`[data-message-id="${currentStreamingMessage.id}"]`);
-    if (messageElement) {
-        const contentElement = messageElement.querySelector('.message-content');
-        if (contentElement) {
-            contentElement.innerHTML = formatMessageContent(currentStreamingMessage.content, 'assistant');
-        }
-        
-        // Remove streaming class
-        messageElement.classList.remove('streaming');
-    }
-    
-    currentStreamingMessage = null;
-    scrollToBottom();
-}
-
-/**
- * Handle streaming errors
- */
-function handleStreamingError(data) {
-    console.error('Streaming error:', data);
-    
-    if (currentStreamingMessage) {
-        const messageElement = document.querySelector(`[data-message-id="${currentStreamingMessage.id}"]`);
-        if (messageElement) {
-            const contentElement = messageElement.querySelector('.message-content');
-            if (contentElement) {
-                contentElement.innerHTML = `<div class="error-message">Error: ${data.error || 'Failed to process message'}</div>`;
-            }
-            messageElement.classList.remove('streaming');
-            messageElement.classList.add('error');
-        }
-        currentStreamingMessage = null;
-    }
-    
-    const errorMessage = data.data?.error || data.error || 'Unknown error'; // Support both structures
-    showError(`Chat error: ${errorMessage}`);
-}
-
-/**
- * Add a streaming message to the chat interface
- */
-function addStreamingMessageToChat(message) {
-    console.log('Adding streaming message to chat:', message.id);
-    
-    const chatMessages = document.querySelector('.chat-messages');
-    if (!chatMessages) {
-        console.error('❌ Chat messages container not found');
-        return;
-    }
-    
-    // Hide no-messages placeholder if it exists
-    const noMessages = chatMessages.querySelector('.no-messages');
-    if (noMessages) {
-        console.log('Hiding no-messages placeholder');
-        noMessages.style.display = 'none';
-    }
-    
-    // Hide welcome message if it exists  
-    const welcomeMessage = document.querySelector('.welcome-message');
-    if (welcomeMessage) {
-        console.log('Hiding welcome message');
-        welcomeMessage.style.display = 'none';
-    }
-    
-    const messageHTML = `
-        <div class="message assistant-message streaming" data-message-id="${message.id}">
-            <div class="message-content">${formatMessageContent(message.content, 'assistant')}<span class="streaming-cursor">▊</span></div>
-            <div class="message-time">${formatTime(message.timestamp)}</div>
-        </div>
-    `;
-    
-    console.log('Inserting message HTML into chat');
-    chatMessages.insertAdjacentHTML('beforeend', messageHTML);
-    
-    // Verify the message was added
-    const addedMessage = document.querySelector(`[data-message-id="${message.id}"]`);
-    if (addedMessage) {
-        console.log('✅ Streaming message successfully added to DOM');
-    } else {
-        console.error('❌ Failed to add streaming message to DOM');
-    }
-    
-    scrollToBottom();
-}
-
-/**
- * Send a message with direct streaming support
- */
-async function sendMessage(messageText) {
-    if (!currentSessionId || !messageText.trim()) {
-        return;
     }
 
-    try {
-        console.log('Sending message:', messageText);
-        
-        // Add user message to chat immediately
-        addMessageToChat('user', messageText.trim());
-        
-        // Clear input field
-        const chatInput = document.querySelector('#chat-input');
-        if (chatInput) {
-            chatInput.value = '';
-        }
-        
-        // Send message to backend with streaming enabled
-        const response = await fetch(`${BACKEND_API_URL}/chat`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                session_id: currentSessionId,
-                message: messageText.trim(),
-                stream: true
-            })
-        });
-        
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        // Check if it's a streaming response
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('text/event-stream')) {
-            console.log('📡 Received streaming response, processing events...');
-            await handleStreamingResponse(response);
-        } else {
-            // Non-streaming response
-            const data = await response.json();
-            console.log('Chat response:', data);
-            if (data.response) {
-                addMessageToChat('assistant', data.response);
-            }
-        }
-        
-    } catch (error) {
-        console.error('Error sending message:', error);
-        showError(`Failed to send message: ${error.message}`);
-    }
-}
-
-/**
- * Handle streaming response from chat endpoint
- */
-async function handleStreamingResponse(response) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let currentStreamingMessage = null;
-    
-    try {
-        while (true) {
-            const { done, value } = await reader.read();
-            
-            if (done) {
-                console.log('📊 Streaming completed');
-                break;
-            }
-            
-            // Decode chunk and add to buffer
-            buffer += decoder.decode(value, { stream: true });
-            
-            // Process complete lines
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || ''; // Keep incomplete line in buffer
-            
-            for (const line of lines) {
-                if (line.trim()) {
-                    try {
-                        // Handle SSE format: lines start with "data: " followed by JSON
-                        let eventData;
-                        if (line.startsWith('data: ')) {
-                            // Extract JSON from SSE data line
-                            const jsonStr = line.substring(6); // Remove "data: " prefix
-                            eventData = JSON.parse(jsonStr);
-                        } else if (line.startsWith('{')) {
-                            // Direct JSON (fallback for other formats)
-                            eventData = JSON.parse(line);
-                        } else {
-                            // Skip non-data lines (like keep-alive comments)
-                            continue;
-                        }
-                        
-                        console.log('📩 Stream event:', eventData.event, eventData.content);
-                        
-                        switch (eventData.event) {
-                            case 'RunStarted':
-                                console.log('🚀 Chat run started');
-                                // Create new streaming message
-                                currentStreamingMessage = {
-                                    id: `stream-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-                                    content: '',
-                                    timestamp: new Date()
-                                };
-                                addStreamingMessageToChat(currentStreamingMessage);
-                                break;
-                                
-                            case 'RunResponse':
-                                // Add character to streaming message
-                                if (currentStreamingMessage) {
-                                    currentStreamingMessage.content += eventData.content;
-                                    updateStreamingMessageContent(currentStreamingMessage);
-                                }
-                                break;
-                                
-                            case 'RunCompleted':
-                                console.log('✅ Chat run completed');
-                                if (currentStreamingMessage) {
-                                    // Finalize message with complete content
-                                    currentStreamingMessage.content = eventData.content;
-                                    completeStreamingMessageFinal(currentStreamingMessage);
-                                    currentStreamingMessage = null;
-                                }
-                                
-                                // Remove auto-refresh to prevent duplicate user messages
-                                // Since we're already handling real-time updates, refresh is not needed
-                                break;
-                                
-                            case 'RunError':
-                                console.error('❌ Chat run error:', eventData.error);
-                                if (currentStreamingMessage) {
-                                    showStreamingError(currentStreamingMessage, eventData.error);
-                                    currentStreamingMessage = null;
-                                }
-                                break;
-                        }
-                        
-                    } catch (parseError) {
-                        console.warn('⚠️ Failed to parse event:', line, parseError);
+    loadState() {
+        try {
+            const saved = localStorage.getItem('obelisk_state');
+            if (saved) {
+                const state = JSON.parse(saved);
+                
+                // Check version for config migration
+                if (!state.version || state.version !== '1.1') {
+                    console.log('Migrating config to new defaults (temperature 1.0, max_tokens 5000)');
+                    // Reset to new defaults for config migration
+                    this.aiConfig = {
+                        model: "deepseek/deepseek-chat-v3-0324:free",
+                        temperature: 1.0,
+                        max_tokens: 5000,
+                        streaming: true,
+                        show_tool_calls: true
+                    };
+                } else {
+                    // Load saved config only if version matches
+                    if (state.aiConfig) {
+                        this.aiConfig = { ...this.aiConfig, ...state.aiConfig };
                     }
+                }
+                
+                // Always load session and pagination state
+                this.currentSessionId = state.currentSessionId;
+                this.pagination = { ...this.pagination, ...state.pagination };
+            }
+        } catch (error) {
+            console.warn('Failed to load application state:', error);
+        }
+    }
+
+    updateAiConfig(newConfig) {
+        this.aiConfig = { ...this.aiConfig, ...newConfig };
+        this.saveState();
+    }
+
+    getConfigOverride() {
+        // Only return config if it differs from defaults
+        const defaults = {
+            model: "deepseek/deepseek-chat-v3-0324:free",
+            temperature: 1.0,
+            max_tokens: 5000
+        };
+
+        const override = {};
+        if (this.aiConfig.model !== defaults.model) {
+            override.model = this.aiConfig.model;
+        }
+        if (this.aiConfig.temperature !== defaults.temperature) {
+            override.temperature = this.aiConfig.temperature;
+        }
+        if (this.aiConfig.max_tokens !== defaults.max_tokens) {
+            override.max_tokens = this.aiConfig.max_tokens;
+        }
+
+        return Object.keys(override).length > 0 ? override : null;
+    }
+}
+
+const appState = new AppState();
+
+// Config Management
+class ConfigManager {
+    constructor() {
+        this.modelOptions = [
+            { value: "qwen/qwen3-235b-a22b:free", label: "Qwen 3.2 235B (Free)" },
+            { value: "deepseek/deepseek-r1-0528:free", label: "DeepSeek R1 (Free)" },
+            { value: "mistralai/mistral-small-3.2-24b-instruct:free", label: "Mistral Small 3.2 (Free)" },
+            { value: "deepseek/deepseek-chat-v3-0324:free", label: "DeepSeek Chat v3 (Default)" }
+        ];
+        this.initializeModal();
+    }
+
+    initializeModal() {
+        // Modal elements
+        this.modal = document.getElementById('configModal');
+        this.modelSelect = document.getElementById('modelSelect');
+        this.temperatureSlider = document.getElementById('temperatureSlider');
+        this.maxTokensInput = document.getElementById('maxTokensInput');
+
+        // Value display elements
+        this.temperatureValue = document.getElementById('temperatureValue');
+
+        // Preview elements
+        this.previewModel = document.getElementById('previewModel');
+        this.previewTemperature = document.getElementById('previewTemperature');
+        this.previewMaxTokens = document.getElementById('previewMaxTokens');
+
+        // Bind events
+        this.bindEvents();
+        
+        // Initialize values
+        this.loadCurrentConfig();
+    }
+
+    bindEvents() {
+        // Modal controls
+        document.getElementById('configBtn').addEventListener('click', () => this.openModal());
+        document.getElementById('closeConfigModal').addEventListener('click', () => this.closeModal());
+        document.getElementById('cancelConfigBtn').addEventListener('click', () => this.closeModal());
+        document.getElementById('saveConfigBtn').addEventListener('click', () => this.saveConfig());
+        document.getElementById('resetConfigBtn').addEventListener('click', () => this.resetToDefaults());
+
+        // Close modal on overlay click
+        this.modal.addEventListener('click', (e) => {
+            if (e.target === this.modal) {
+                this.closeModal();
+            }
+        });
+
+        // Input event listeners
+        this.modelSelect.addEventListener('change', () => this.updatePreview());
+        this.temperatureSlider.addEventListener('input', () => this.updateSliderValues());
+        this.maxTokensInput.addEventListener('input', () => this.updatePreview());
+    }
+
+    openModal() {
+        this.loadCurrentConfig();
+        this.modal.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    }
+
+    closeModal() {
+        this.modal.style.display = 'none';
+        document.body.style.overflow = 'auto';
+        this.loadCurrentConfig(); // Reset to current values
+    }
+
+    loadCurrentConfig() {
+        const config = appState.aiConfig;
+        
+        // Set form values
+        this.modelSelect.value = config.model;
+        this.temperatureSlider.value = config.temperature;
+        this.maxTokensInput.value = config.max_tokens;
+        
+        // Update displays
+        this.updateSliderValues();
+        this.updatePreview();
+    }
+
+    updateSliderValues() {
+        this.temperatureValue.textContent = this.temperatureSlider.value;
+        this.updatePreview();
+    }
+
+    updatePreview() {
+        const selectedModel = this.modelOptions.find(opt => opt.value === this.modelSelect.value);
+        this.previewModel.textContent = selectedModel ? selectedModel.label : this.modelSelect.value;
+        this.previewTemperature.textContent = this.temperatureSlider.value;
+        this.previewMaxTokens.textContent = this.maxTokensInput.value;
+    }
+
+    saveConfig() {
+        const newConfig = {
+            model: this.modelSelect.value,
+            temperature: parseFloat(this.temperatureSlider.value),
+            max_tokens: parseInt(this.maxTokensInput.value),
+            streaming: true, // Keep current streaming setting
+            show_tool_calls: true // Keep current tool calls setting
+        };
+
+        appState.updateAiConfig(newConfig);
+        
+        // Immediately update the session header to show the new config
+        this.updateSessionHeaderWithNewConfig(newConfig);
+        
+        notifications.success('AI configuration updated successfully');
+        this.closeModal();
+    }
+
+    updateSessionHeaderWithNewConfig(config) {
+        // Update the session header immediately to show the new model
+        if (appState.currentSessionId) {
+            const modelOption = this.modelOptions.find(opt => opt.value === config.model);
+            const modelDisplayName = modelOption ? modelOption.label : config.model;
+            
+            // Find and update the model display in the session metadata
+            const sessionMetadata = document.getElementById('sessionMetadata');
+            if (sessionMetadata) {
+                // Look for existing model info and update it
+                const statusIndicators = sessionMetadata.querySelectorAll('.status-indicator');
+                let modelUpdated = false;
+                
+                statusIndicators.forEach(indicator => {
+                    if (indicator.textContent.includes('Model:')) {
+                        indicator.textContent = `Model: ${config.model}`;
+                        modelUpdated = true;
+                    }
+                });
+                
+                // If no model indicator exists, add one
+                if (!modelUpdated) {
+                    const modelIndicator = document.createElement('span');
+                    modelIndicator.className = 'status-indicator';
+                    modelIndicator.textContent = `Model: ${config.model}`;
+                    sessionMetadata.appendChild(modelIndicator);
                 }
             }
         }
-    } catch (error) {
-        console.error('❌ Streaming error:', error);
-        showError(`Streaming failed: ${error.message}`);
+    }
+
+    resetToDefaults() {
+        const defaults = {
+            model: "deepseek/deepseek-chat-v3-0324:free",
+            temperature: 1.0,
+            max_tokens: 5000,
+            streaming: true,
+            show_tool_calls: true
+        };
+
+        this.modelSelect.value = defaults.model;
+        this.temperatureSlider.value = defaults.temperature;
+        this.maxTokensInput.value = defaults.max_tokens;
+        
+        this.updateSliderValues();
+        this.updatePreview();
     }
 }
 
-/**
- * Update streaming message content in real-time
- */
-function updateStreamingMessageContent(message) {
-    const messageElement = document.querySelector(`[data-message-id="${message.id}"] .message-content`);
-    if (messageElement) {
-        messageElement.innerHTML = formatMessageContent(message.content, 'assistant') + '<span class="streaming-cursor">▊</span>';
-        scrollToBottom();
+// DOM Manager
+class DOMManager {
+    constructor() {
+        this.elements = {};
+        this.initializeElements();
     }
-}
 
-/**
- * Complete streaming message (remove cursor, mark as final)
- */
-function completeStreamingMessageFinal(message) {
-    const messageElement = document.querySelector(`[data-message-id="${message.id}"]`);
-    if (messageElement) {
-        const contentElement = messageElement.querySelector('.message-content');
-        if (contentElement) {
-            contentElement.innerHTML = formatMessageContent(message.content, 'assistant');
+    initializeElements() {
+        this.elements = {
+            // Session management
+            sessionList: document.getElementById('sessionList'),
+            sessionSearch: document.getElementById('sessionSearch'),
+            newSessionBtn: document.getElementById('newSessionBtn'),
+            welcomeNewSessionBtn: document.getElementById('welcomeNewSessionBtn'),
+            refreshSessionsBtn: document.getElementById('refreshSessionsBtn'),
+            
+            // Pagination
+            pagination: document.getElementById('pagination'),
+            paginationInfo: document.getElementById('paginationInfo'),
+            prevPageBtn: document.getElementById('prevPageBtn'),
+            nextPageBtn: document.getElementById('nextPageBtn'),
+            
+            // Chat interface
+            sessionTitle: document.getElementById('sessionTitle'),
+            sessionMetadata: document.getElementById('sessionMetadata'),
+            chatMessages: document.getElementById('chatMessages'),
+            welcomeScreen: document.getElementById('welcomeScreen'),
+            
+            // Input
+            chatForm: document.getElementById('chatForm'),
+            messageInput: document.getElementById('messageInput'),
+            sendBtn: document.getElementById('sendBtn'),
+            attachBtn: document.getElementById('attachBtn'),
+            messageInfo: document.getElementById('messageInfo'),
+            
+            // UI controls
+            exportBtn: document.getElementById('exportBtn'),
+            settingsBtn: document.getElementById('settingsBtn'),
+            configBtn: document.getElementById('configBtn'),
+            loadingOverlay: document.getElementById('loadingOverlay'),
+            notificationContainer: document.getElementById('notificationContainer'),
+            
+            // Config Modal
+            configModal: document.getElementById('configModal'),
+            modelSelect: document.getElementById('modelSelect'),
+            temperatureSlider: document.getElementById('temperatureSlider'),
+            maxTokensInput: document.getElementById('maxTokensInput'),
+            temperatureValue: document.getElementById('temperatureValue'),
+            previewModel: document.getElementById('previewModel'),
+            previewTemperature: document.getElementById('previewTemperature'),
+            previewMaxTokens: document.getElementById('previewMaxTokens'),
+            closeConfigModal: document.getElementById('closeConfigModal'),
+            cancelConfigBtn: document.getElementById('cancelConfigBtn'),
+            saveConfigBtn: document.getElementById('saveConfigBtn'),
+            resetConfigBtn: document.getElementById('resetConfigBtn')
+        };
+    }
+
+    showElement(element, show = true) {
+        if (element) {
+            element.style.display = show ? '' : 'none';
         }
-        messageElement.classList.remove('streaming');
     }
-    scrollToBottom();
-}
 
-/**
- * Show streaming error
- */
-function showStreamingError(message, error) {
-    const messageElement = document.querySelector(`[data-message-id="${message.id}"]`);
-    if (messageElement) {
-        const contentElement = messageElement.querySelector('.message-content');
-        if (contentElement) {
-            contentElement.innerHTML = `<div class="error-message">Error: ${error}</div>`;
+    hideElement(element) {
+        this.showElement(element, false);
+    }
+
+    enableElement(element, enabled = true) {
+        if (element) {
+            element.disabled = !enabled;
         }
-        messageElement.classList.remove('streaming');
-        messageElement.classList.add('error');
+    }
+
+    setElementText(element, text) {
+        if (element) {
+            element.textContent = text;
+        }
+    }
+
+    setElementHTML(element, html) {
+        if (element) {
+            element.innerHTML = html;
+        }
     }
 }
 
-/**
- * Add a streaming message to chat with blinking cursor
- */
-function addStreamingMessageToChat(message) {
-    const chatMessages = document.querySelector('.chat-messages');
-    if (!chatMessages) return;
+const dom = new DOMManager();
 
-    const messageElement = document.createElement('div');
-    messageElement.className = 'message assistant streaming';
-    messageElement.setAttribute('data-message-id', message.id);
-    
-    messageElement.innerHTML = `
-        <div class="message-avatar">
-            <div class="assistant-avatar">AI</div>
-        </div>
-        <div class="message-content-wrapper">
-            <div class="message-content">${message.content}<span class="streaming-cursor">▊</span></div>
-            <div class="message-timestamp">${formatTimestamp(message.timestamp)}</div>
+// Notification System
+class NotificationManager {
+    show(message, type = 'info', duration = 5000) {
+        const notification = document.createElement('div');
+        notification.className = `notification ${type}`;
+        notification.innerHTML = `
+            <div class="notification-content">
+                <span class="notification-message">${message}</span>
+                <button class="notification-close" onclick="this.parentElement.parentElement.remove()">×</button>
         </div>
     `;
     
-    chatMessages.appendChild(messageElement);
-    scrollToBottom();
-}
+        dom.elements.notificationContainer.appendChild(notification);
 
-/**
- * Add a regular message to chat (for user messages or fallback)
- */
-function addMessageToChat(messageType, content, timestamp = new Date()) {
-    const chatMessages = document.querySelector('.chat-messages');
-    if (!chatMessages) return;
-    
-    // Hide no-messages placeholder if it exists
-    const noMessages = chatMessages.querySelector('.no-messages');
-    if (noMessages) {
-        noMessages.style.display = 'none';
+        // Auto-remove after duration
+        if (duration > 0) {
+            setTimeout(() => {
+                if (notification.parentElement) {
+                    notification.remove();
+                }
+            }, duration);
+        }
+
+        return notification;
     }
-    
-    const message = {
-        id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        type: messageType,
-        content: content,
-        timestamp: timestamp
-    };
-    
-    const messageHTML = createMessageElement(message);
-    const messageElement = document.createElement('div');
-    messageElement.innerHTML = messageHTML;
-    
-    chatMessages.appendChild(messageElement.firstElementChild);
-    scrollToBottom();
+
+    error(message, duration = 7000) {
+        return this.show(message, 'error', duration);
+    }
+
+    success(message, duration = 4000) {
+        return this.show(message, 'success', duration);
+    }
+
+    warning(message, duration = 5000) {
+        return this.show(message, 'warning', duration);
+    }
 }
 
-// === Session Management Functions ===
+const notifications = new NotificationManager();
 
-async function loadSessions() {
-    try {
-        console.log('Loading sessions...');
-        setLoadingState(true);
-        
-        const response = await fetch(`${API_BASE_URL}/sessions`);
+// API Client
+class APIClient {
+    async request(endpoint, options = {}) {
+        const url = `${API_CONFIG.BASE_URL}${endpoint}`;
+        const config = {
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            },
+            ...options
+        };
+
+        try {
+            const response = await fetch(url, config);
         
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+                const error = await response.text();
+                throw new Error(`HTTP ${response.status}: ${error}`);
         }
         
-        const data = await response.json();
-        console.log('Sessions API response:', data);
-        
-        // Use parser to process sessions data
-        sessions = parseSessionsList(data);
-        console.log('Parsed sessions:', sessions);
-        
-        renderSessions(sessions);
-        
-        // Load the first session by default if available and no session is currently loaded
-        if (sessions.length > 0 && !currentSessionId) {
-            loadSession(sessions[0].id);
-        }
-        
-        setLoadingState(false);
-    } catch (error) {
-        console.error('Error loading sessions:', error);
-        showError('Failed to load sessions. Please try again.');
-        setLoadingState(false);
-    }
-}
-
-function renderSessions(sessions) {
-    const sessionList = document.querySelector('.session-list');
-    if (!sessionList) {
-        console.error('Session list element not found');
-        return;
-    }
-    
-    sessionList.innerHTML = '';
-    
-    if (sessions.length === 0) {
-        sessionList.innerHTML = '<div class="no-sessions p-4 text-gray-400 text-center">No sessions found. Create a new session to get started.</div>';
-        return;
-    }
-    
-    sessions.forEach(session => {
-        // Use parser function to create session element
-        const sessionHTML = createSessionElement(session);
-        const sessionElement = document.createElement('div');
-        sessionElement.innerHTML = sessionHTML;
-        const sessionItem = sessionElement.firstElementChild;
-        
-        // Add click event listener
-        sessionItem.addEventListener('click', () => {
-            loadSession(session.id);
-            
-            // Update active session styling
-            document.querySelectorAll('.session-item').forEach(item => {
-                item.classList.remove('border-blue-500', 'bg-gray-700');
-                item.classList.add('border-transparent');
-            });
-            sessionItem.classList.remove('border-transparent');
-            sessionItem.classList.add('border-blue-500', 'bg-gray-700');
-        });
-        
-        sessionList.appendChild(sessionItem);
-    });
-}
-
-async function loadSession(sessionId) {
-    try {
-        console.log('Loading session:', sessionId);
-        
-        // Disconnect any existing SSE connection
-        // SSE disconnection removed
-        
-        currentSessionId = sessionId;
-        
-        // Show loading state
-        const chatMessages = document.querySelector('.chat-messages');
-        if (chatMessages) {
-            chatMessages.innerHTML = '<div class="loading p-4 text-center text-gray-400">Loading conversation...</div>';
-        }
-        
-        const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}`);
-        
-        if (!response.ok) {
-            if (response.status === 404) {
-                throw new Error('Session not found');
-            }
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const sessionData = await response.json();
-        console.log('Session API response:', sessionData);
-        
-        // Debug the conversation structure
-        debugConversationStructure(sessionData);
-        
-        // Validate and extract conversation data
-        if (validateConversationData(sessionData)) {
-            // Use dedicated conversation parser
-            const messages = extractConversationMessages(sessionData.conversation_history);
-            const sessionMetadata = extractSessionMetadata(sessionData);
-            
-            console.log('Extracted messages:', messages);
-            console.log('Session metadata:', sessionMetadata);
-            
-            // Update session title in header
-            updateSessionHeader(sessionMetadata);
-            
-            // Render conversation history
-            renderConversationHistory(messages);
+            // Handle different content types
+        const contentType = response.headers.get('content-type');
+            if (contentType?.includes('application/json')) {
+                return await response.json();
+            } else if (contentType?.includes('text/event-stream')) {
+                return response; // Return response for streaming
         } else {
-            // Fallback to original parser
-            const parsedSession = parseSessionDetails(sessionData);
-            console.log('Using fallback parser, session details:', parsedSession);
-            
-            updateSessionHeader(parsedSession);
-            renderConversationHistory(parsedSession.messages);
-        }
-        
-        // SSE connection no longer needed - using direct streaming from chat endpoint
-        
-        // Enable chat input after successful load
-        if (typeof window.enableChatInput === 'function') {
-            window.enableChatInput();
-        }
-        
-        // Hide welcome message
-        const welcomeMessage = document.querySelector('.welcome-message');
-        if (welcomeMessage) {
-            welcomeMessage.style.display = 'none';
-        }
-        
+                return await response.text();
+            }
     } catch (error) {
-        console.error('Error loading session:', error);
-        showError(`Failed to load session: ${error.message}`);
-        
-        // Clear messages on error
-        const chatMessages = document.querySelector('.chat-messages');
-        if (chatMessages) {
-            chatMessages.innerHTML = '<div class="error p-4 text-center text-red-400">Failed to load conversation</div>';
+            console.error(`API request failed for ${endpoint}:`, error);
+            throw error;
         }
+    }
+
+    async getSessions(page = 1, pageSize = 50) {
+        const offset = (page - 1) * pageSize;
+        return this.request(`${API_CONFIG.ENDPOINTS.SESSIONS}?limit=${pageSize}&offset=${offset}`);
+    }
+
+    async getSession(sessionId) {
+        return this.request(`${API_CONFIG.ENDPOINTS.SESSIONS}/${sessionId}`);
+    }
+
+    async createSession(sessionData = {}) {
+        return this.request(API_CONFIG.ENDPOINTS.SESSIONS, {
+            method: 'POST',
+            body: JSON.stringify(sessionData)
+        });
+    }
+
+    async sendMessage(sessionId, message, streaming = true) {
+        const requestData = {
+            session_id: sessionId,
+            message: message,
+            stream: streaming
+        };
+
+        // Add config override if different from defaults
+        const configOverride = appState.getConfigOverride();
+        if (configOverride) {
+            requestData.config_override = configOverride;
+        }
+
+        return this.request(API_CONFIG.ENDPOINTS.CHAT, {
+            method: 'POST',
+            body: JSON.stringify(requestData)
+        });
     }
 }
 
-function updateSessionHeader(sessionData) {
-    const sessionTitle = document.querySelector('.session-title-header');
-    if (sessionTitle) {
-        const name = sessionData.name || `Session ${sessionData.id.substring(0, 8)}`;
-        sessionTitle.textContent = name;
+const apiClient = new APIClient();
+
+// Session Manager
+class SessionManager {
+    async loadSessions(page = 1) {
+        try {
+            dom.showElement(dom.elements.loadingOverlay);
+            
+            const response = await apiClient.getSessions(page, appState.pagination.pageSize);
+            
+            // Parse SessionListResponse
+            const sessions = response.sessions || [];
+            const pagination = {
+                page: response.page || 1,
+                pageSize: response.page_size || 50,
+                total: response.total || 0
+            };
+
+            appState.setSessions(sessions, pagination);
+            this.renderSessions();
+            this.updatePagination();
+
+            // Load first session if none selected
+            if (sessions.length > 0 && !appState.currentSessionId) {
+                await this.loadSession(sessions[0].id);
+            }
+
+    } catch (error) {
+            console.error('Failed to load sessions:', error);
+            notifications.error(`Failed to load sessions: ${error.message}`);
+            this.renderError('Failed to load sessions');
+        } finally {
+            dom.hideElement(dom.elements.loadingOverlay);
+        }
     }
-    
-    const sessionInfo = document.querySelector('.session-info');
-    if (sessionInfo) {
-        sessionInfo.innerHTML = `
-            <span>${sessionData.messageCount || 0} messages</span>
-            <span>•</span>
-            <span class="capitalize">${sessionData.status}</span>
-            ${sessionData.metadata?.model ? `<span>•</span><span>${sessionData.metadata.model.split('/').pop()}</span>` : ''}
+
+    renderSessions() {
+        if (!dom.elements.sessionList) return;
+
+        if (appState.sessions.length === 0) {
+            dom.setElementHTML(dom.elements.sessionList, `
+                <div class="no-sessions">
+                    <p>No sessions found</p>
+                    <button class="btn btn-primary" onclick="sessionManager.createSession()">
+                        Create First Session
+                    </button>
+                </div>
+            `);
+            return;
+        }
+
+        const sessionsHTML = appState.sessions.map(session => this.createSessionElement(session)).join('');
+        dom.setElementHTML(dom.elements.sessionList, sessionsHTML);
+
+        // Add event listeners
+        this.attachSessionEventListeners();
+    }
+
+    createSessionElement(session) {
+        const isActive = session.id === appState.currentSessionId;
+        const statusClass = session.status || 'active';
+        const createdAt = session.created_at ? new Date(session.created_at).toLocaleDateString() : 'Unknown';
+        
+        // Extract additional info from session metadata
+        const messageCount = session.message_count || session.metadata?.total_messages || 0;
+        const turnCount = session.metadata?.total_turns || 0;
+        
+        return `
+            <div class="session-item ${isActive ? 'active' : ''}" data-session-id="${session.id}">
+                <div class="session-item-header">
+                    <div class="session-item-title" title="${session.name || session.id}">
+                        ${session.name || `Session ${session.id.substring(0, 8)}`}
+                    </div>
+                    <span class="session-status ${statusClass}">${statusClass}</span>
+                </div>
+                <div class="session-item-meta">
+                    <span class="message-count">${messageCount} messages</span>
+                    ${turnCount > 0 ? `<span class="turn-count">${turnCount} turns</span>` : ''}
+                    <span class="session-date">${createdAt}</span>
+                </div>
+            </div>
         `;
     }
-}
 
-function renderConversationHistory(messages) {
-    const chatMessages = document.querySelector('.chat-messages');
-    if (!chatMessages) {
-        console.error('Chat messages element not found');
+    attachSessionEventListeners() {
+        const sessionItems = dom.elements.sessionList.querySelectorAll('.session-item');
+        sessionItems.forEach(item => {
+            item.addEventListener('click', async () => {
+                const sessionId = item.dataset.sessionId;
+                await this.loadSession(sessionId);
+            });
+        });
+    }
+
+    updatePagination() {
+        if (!dom.elements.pagination) return;
+
+        const { page, pageSize, total } = appState.pagination;
+        const totalPages = Math.ceil(total / pageSize);
+
+        if (totalPages <= 1) {
+            dom.hideElement(dom.elements.pagination);
+            return;
+        }
+
+        dom.showElement(dom.elements.pagination);
+        dom.setElementText(dom.elements.paginationInfo, `Page ${page} of ${totalPages}`);
+        
+        dom.enableElement(dom.elements.prevPageBtn, page > 1);
+        dom.enableElement(dom.elements.nextPageBtn, page < totalPages);
+    }
+
+    async loadSession(sessionId) {
+        try {
+            appState.setCurrentSession(sessionId);
+            
+            // Update UI immediately
+            this.updateActiveSessionUI();
+            dom.hideElement(dom.elements.welcomeScreen);
+            
+            // Show loading in chat area
+            dom.setElementHTML(dom.elements.chatMessages, `
+                <div class="loading-state">
+                    <div class="spinner"></div>
+                    <span>Loading conversation...</span>
+                </div>
+            `);
+
+            const sessionData = await apiClient.getSession(sessionId);
+            
+            // Update session header
+            this.updateSessionHeader(sessionData);
+            
+            // Render conversation history
+            this.renderConversationHistory(sessionData.conversation_history);
+            
+            // Enable chat input
+            this.enableChatInput();
+
+    } catch (error) {
+            console.error('Failed to load session:', error);
+            notifications.error(`Failed to load session: ${error.message}`);
+            this.renderError('Failed to load conversation');
+        }
+    }
+
+    updateActiveSessionUI() {
+        // Update session list active state
+        const sessionItems = dom.elements.sessionList.querySelectorAll('.session-item');
+        sessionItems.forEach(item => {
+            const isActive = item.dataset.sessionId === appState.currentSessionId;
+            item.classList.toggle('active', isActive);
+        });
+    }
+
+    updateSessionHeader(sessionData) {
+        const title = sessionData.name || `Session ${sessionData.session_id.substring(0, 8)}`;
+        dom.setElementText(dom.elements.sessionTitle, title);
+
+        // Extract data from the new session_data structure
+        const sessionInfo = sessionData.session_data || {};
+        const config = sessionInfo.config || {};
+        const statistics = sessionInfo.statistics || {};
+        const metadata = sessionInfo.metadata || {};
+
+        // Format display values
+        const model = config.model ? config.model.split('/').pop() : 'Unknown';
+        const messageCount = sessionData.message_count || metadata.total_messages || 0;
+        const totalTurns = metadata.total_turns || 0;
+        const avgResponseTime = statistics.average_response_time_ms 
+            ? `${(statistics.average_response_time_ms / 1000).toFixed(2)}s avg`
+            : '';
+        const tokenUsage = statistics.total_tokens_input || statistics.total_tokens_output
+            ? `${statistics.total_tokens_input || 0}/${statistics.total_tokens_output || 0} tokens`
+            : '';
+
+        const metadataHTML = `
+            <span class="status-indicator">${sessionData.status || 'active'}</span>
+            <span class="session-stat">${messageCount} messages</span>
+            <span class="session-stat">${totalTurns} turns</span>
+            ${sessionData.created_at ? `<span class="session-stat">Created ${new Date(sessionData.created_at).toLocaleDateString()}</span>` : ''}
+            <span class="session-stat">Model: ${model}</span>
+            ${avgResponseTime ? `<span class="session-stat">${avgResponseTime}</span>` : ''}
+            ${tokenUsage ? `<span class="session-stat">${tokenUsage}</span>` : ''}
+        `;
+        dom.setElementHTML(dom.elements.sessionMetadata, metadataHTML);
+    }
+
+    renderConversationHistory(conversationHistory) {
+        if (!conversationHistory || !conversationHistory.conversation_turns) {
+            dom.setElementHTML(dom.elements.chatMessages, `
+                <div class="no-messages">
+                    <p>No messages in this conversation yet.</p>
+                    <p>Start by sending a message below!</p>
+                </div>
+            `);
         return;
     }
     
-    chatMessages.innerHTML = '';
-    
-    if (!messages || messages.length === 0) {
-        chatMessages.innerHTML = '<div class="no-messages p-8 text-center text-gray-400">No messages in this conversation yet. Start by sending a message!</div>';
-        return;
+        const messages = this.extractMessages(conversationHistory.conversation_turns);
+        const messagesHTML = messages.map(msg => this.createMessageElement(msg)).join('');
+        dom.setElementHTML(dom.elements.chatMessages, messagesHTML);
+        
+        this.scrollToBottom();
     }
-    
-    // Use parser function to create message elements
-    messages.forEach(message => {
-        const messageHTML = createMessageElement(message);
-        const messageElement = document.createElement('div');
-        messageElement.innerHTML = messageHTML;
-        chatMessages.appendChild(messageElement.firstElementChild);
-    });
-    
-    // Scroll to bottom
-    scrollToBottom();
-}
 
-function formatMessageContent(content, messageType = 'assistant') {
-    if (!content) return '';
-    
-    // For assistant messages, use markdown rendering
-    if (messageType === 'assistant') {
-        // Check if marked is available and configure it properly
-        if (typeof marked !== 'undefined') {
-            try {
-                // Configure marked with better options for chat
-                marked.setOptions({
-                    breaks: true,        // Convert line breaks to <br>
-                    gfm: true,          // GitHub Flavored Markdown
-                    headerIds: false,   // Don't add IDs to headers
-                    mangle: false,      // Don't mangle email addresses
-                    sanitize: false,    // We'll handle sanitization ourselves
-                    silent: false       // Don't silently ignore errors
+    extractMessages(turns) {
+        const messages = [];
+        
+        turns.forEach(turn => {
+            // Add user message
+            if (turn.user_message) {
+                messages.push({
+                    id: turn.user_message.message_id,
+                    role: 'user',
+                    content: turn.user_message.content,
+                    timestamp: turn.user_message.timestamp,
+                    metadata: turn.user_message.metadata || {}
                 });
-                
+            }
+
+            // Add assistant responses
+            if (turn.assistant_responses) {
+                turn.assistant_responses.forEach(response => {
+                    if (response.is_active !== false) { // Include if not explicitly false
+                        messages.push({
+                            id: response.message_id,
+                            role: 'assistant',
+                            content: response.final_content || response.content,
+                            timestamp: response.timestamp,
+                            metadata: response.metadata || {}
+                        });
+                    }
+                });
+            }
+        });
+
+        return messages;
+    }
+
+    createMessageElement(message) {
+        const timestamp = message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : '';
+        const content = this.formatMessageContent(message.content, message.role);
+        
+        // For assistant messages, include model name if available
+        let messageFooter = timestamp;
+        if (message.role === 'assistant' && message.metadata && message.metadata.generation_config) {
+            const model = message.metadata.generation_config.model;
+            if (model) {
+                // Extract just the model name part (e.g., "mistral-small-3.2-24b-instruct" from "mistralai/mistral-small-3.2-24b-instruct:free")
+                const modelName = model.split('/').pop().split(':')[0];
+                messageFooter = `${timestamp} • ${modelName}`;
+            }
+        }
+        
+        return `
+            <div class="message ${message.role}-message" data-message-id="${message.id}">
+                <div class="message-content">${content}</div>
+                <div class="message-time">${messageFooter}</div>
+            </div>
+        `;
+    }
+
+    formatMessageContent(content, role) {
+        if (!content) return '';
+
+        if (role === 'assistant' && typeof marked !== 'undefined') {
+            try {
                 return marked.parse(content);
             } catch (error) {
-                console.error('Markdown parsing error:', error);
-                // Fallback to escaped text if markdown fails
-                const escaped = content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                return escaped.replace(/\n/g, '<br>');
+                console.warn('Markdown parsing failed:', error);
+                return this.escapeHtml(content).replace(/\n/g, '<br>');
             }
-        } else {
-            console.warn('Marked library not loaded, using fallback rendering');
-            // Fallback to basic formatting if marked isn't available
-            return formatMarkdownFallback(content);
+        }
+
+        return this.escapeHtml(content).replace(/\n/g, '<br>');
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    renderError(message) {
+        dom.setElementHTML(dom.elements.chatMessages, `
+            <div class="error-state">
+                <p class="error-message">${message}</p>
+                <button class="btn btn-secondary" onclick="sessionManager.loadSession('${appState.currentSessionId}')">
+                    Retry
+                </button>
+            </div>
+        `);
+    }
+
+    enableChatInput() {
+        dom.enableElement(dom.elements.messageInput);
+        dom.enableElement(dom.elements.sendBtn);
+        dom.enableElement(dom.elements.attachBtn);
+        dom.elements.messageInput.placeholder = "Type your message...";
+    }
+
+    disableChatInput() {
+        dom.enableElement(dom.elements.messageInput, false);
+        dom.enableElement(dom.elements.sendBtn, false);
+        dom.enableElement(dom.elements.attachBtn, false);
+        dom.elements.messageInput.placeholder = "Select a session to start chatting...";
+    }
+
+    async createSession() {
+        try {
+            notifications.show('Creating new session...', 'info', 2000);
+            
+            const sessionData = {
+                name: `Chat Session ${new Date().toLocaleString()}`
+            };
+
+            const newSession = await apiClient.createSession(sessionData);
+            
+            if (!newSession || !newSession.id) {
+                throw new Error('Invalid session response from server');
+            }
+            
+            // Reload sessions to include the new one
+            await this.loadSessions();
+            
+            // Load the new session
+            await this.loadSession(newSession.id);
+            
+            notifications.success('New session created successfully');
+        
+        } catch (error) {
+            console.error('Failed to create session:', error);
+            notifications.error(`Failed to create session: ${error.message}`);
         }
     }
-    
-    // For user messages, use basic HTML escaping and line breaks
-    const escaped = content.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return escaped.replace(/\n/g, '<br>');
-}
 
-// Fallback markdown formatter for basic formatting without marked
-function formatMarkdownFallback(content) {
-    if (!content) return '';
-    
-    let formatted = content;
-    
-    // Escape HTML first
-    formatted = formatted.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    
-    // Handle headers
-    formatted = formatted.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-    formatted = formatted.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-    formatted = formatted.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-    
-    // Handle bold text
-    formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    
-    // Handle italic text
-    formatted = formatted.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    
-    // Handle code blocks
-    formatted = formatted.replace(/```([^`]+)```/g, '<pre><code>$1</code></pre>');
-    
-    // Handle inline code
-    formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
-    
-    // Handle lists
-    formatted = formatted.replace(/^- (.+)$/gm, '<li>$1</li>');
-    formatted = formatted.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
-    
-    // Handle line breaks
-    formatted = formatted.replace(/\n/g, '<br>');
-    
-    return formatted;
-}
-
-function formatTimestamp(timestamp) {
-    if (!timestamp) return '';
-    
-    try {
-        const date = new Date(timestamp);
-        const now = new Date();
-        const diffInHours = (now - date) / (1000 * 60 * 60);
-        
-        if (diffInHours < 1) {
-            const minutes = Math.floor((now - date) / (1000 * 60));
-            return `${minutes}m ago`;
-        } else if (diffInHours < 24) {
-            return `${Math.floor(diffInHours)}h ago`;
-        } else if (diffInHours < 48) {
-            return 'Yesterday';
-        } else {
-            return date.toLocaleDateString();
+    scrollToBottom() {
+        if (dom.elements.chatMessages) {
+            dom.elements.chatMessages.scrollTop = dom.elements.chatMessages.scrollHeight;
         }
-    } catch (error) {
-        console.error('Error formatting timestamp:', error);
-        return timestamp;
     }
 }
 
-function scrollToBottom() {
-    const chatMessages = document.querySelector('.chat-messages');
-    if (chatMessages) {
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-    }
-}
+const sessionManager = new SessionManager();
 
-function setLoadingState(loading) {
-    isLoading = loading;
-    const loadingIndicator = document.querySelector('.loading-indicator');
-    if (loadingIndicator) {
-        loadingIndicator.style.display = loading ? 'block' : 'none';
-    }
-}
-
-function showError(message) {
-    // Create a simple error notification
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'error-notification';
-    errorDiv.textContent = message;
-    errorDiv.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        background: #f44336;
-        color: white;
-        padding: 12px 20px;
-        border-radius: 4px;
-        z-index: 1000;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    `;
-    
-    document.body.appendChild(errorDiv);
-    
-    // Remove after 5 seconds
-    setTimeout(() => {
-        if (errorDiv.parentNode) {
-            errorDiv.parentNode.removeChild(errorDiv);
-        }
-    }, 5000);
-}
-
-async function createNewSession() {
-    try {
-        const response = await fetch(`${API_BASE_URL}/api/sessions`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                name: `New Session ${new Date().toLocaleTimeString()}`,
-                metadata: {}
-            })
-        });
-        
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+// Chat Manager
+class ChatManager {
+    async sendMessage(message) {
+        if (!appState.currentSessionId || !message.trim()) {
+            return;
         }
         
-        const newSession = await response.json();
-        console.log('Created new session:', newSession);
-        
-        // Reload sessions to include the new one
-        await loadSessions();
-        
-        // Load the new session
-        loadSession(newSession.id);
-        
-    } catch (error) {
-        console.error('Error creating new session:', error);
-        showError('Failed to create new session. Please try again.');
-    }
-}
+        try {
+            // Add user message to UI immediately
+            this.addUserMessage(message);
+            
+            // Clear input
+            dom.elements.messageInput.value = '';
+            this.autoResizeTextarea(dom.elements.messageInput);
 
-function setupEventHandlers() {
-    // New session buttons (there might be multiple)
-    const newSessionBtns = document.querySelectorAll('.new-session-btn');
-    newSessionBtns.forEach(btn => {
-        btn.addEventListener('click', createNewSession);
-    });
-    
-    // Refresh sessions button
-    const refreshBtn = document.querySelector('.refresh-sessions-btn');
-    if (refreshBtn) {
-        refreshBtn.addEventListener('click', () => loadSessions());
-    }
-    
-    // Search sessions (if implemented)
-    const searchInput = document.querySelector('.session-search');
-    if (searchInput) {
-        searchInput.addEventListener('input', debounce(searchSessions, 300));
-    }
-}
+            // Send message and handle streaming response
+            const response = await apiClient.sendMessage(appState.currentSessionId, message, true);
+            
+            if (response.body) {
+                await this.handleStreamingResponse(response);
+            } else {
+                // Handle non-streaming response
+                this.addAssistantMessage(response.response || 'No response received');
+            }
 
-function debounce(func, wait) {
-    let timeout;
-    return function executedFunction(...args) {
-        const later = () => {
-            clearTimeout(timeout);
-            func(...args);
+            // After successful message, refresh session data to update statistics
+            await this.refreshSessionData();
+
+        } catch (error) {
+            console.error('Failed to send message:', error);
+            notifications.error(`Failed to send message: ${error.message}`);
+            this.addErrorMessage('Failed to send message. Please try again.');
+        }
+    }
+
+    async refreshSessionData() {
+        try {
+            // Refresh current session data to update statistics
+            const sessionData = await apiClient.getSession(appState.currentSessionId);
+            sessionManager.updateSessionHeader(sessionData);
+            
+            // Refresh sessions list to update message count
+            await sessionManager.loadSessions(appState.pagination.page);
+        } catch (error) {
+            console.warn('Failed to refresh session data:', error);
+        }
+    }
+
+    addUserMessage(content) {
+        const message = {
+            id: `user-${Date.now()}`,
+            role: 'user',
+            content: content,
+            timestamp: new Date().toISOString()
         };
-        clearTimeout(timeout);
-        timeout = setTimeout(later, wait);
-    };
-}
 
-function searchSessions(event) {
-    const query = event.target.value.toLowerCase();
-    const sessionItems = document.querySelectorAll('.session-item');
-    
-    sessionItems.forEach(item => {
-        const title = item.querySelector('.session-title').textContent.toLowerCase();
-        const isVisible = title.includes(query);
-        item.style.display = isVisible ? 'block' : 'none';
-    });
-}
-
-// Export functions for global access
-window.loadSessions = loadSessions;
-window.loadSession = loadSession;
-window.createNewSession = createNewSession; 
-window.sendMessage = sendMessage;
-window.addMessageToChat = addMessageToChat;
-
-// === Missing utility functions for conversation parsing ===
-
-/**
- * Debug conversation structure for development
- */
-function debugConversationStructure(sessionData) {
-    console.log('Session data structure:', {
-        hasConversationHistory: !!sessionData.conversation_history,
-        conversationKeys: sessionData.conversation_history ? Object.keys(sessionData.conversation_history) : [],
-        turnsLength: sessionData.conversation_history?.conversation_turns?.length || 0,
-        firstTurn: sessionData.conversation_history?.conversation_turns?.[0] || null
-    });
-}
-
-/**
- * Validate conversation data structure
- */
-function validateConversationData(sessionData) {
-    return sessionData.conversation_history && 
-           sessionData.conversation_history.conversation_turns && 
-           Array.isArray(sessionData.conversation_history.conversation_turns);
-}
-
-/**
- * Extract conversation messages from validated session data
- */
-function extractConversationMessages(conversationHistory) {
-    if (!conversationHistory || !conversationHistory.conversation_turns) {
-        return [];
+        this.addMessageToChat(message);
     }
+
+    async handleStreamingResponse(response) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        // Start assistant message
+        const assistantMessage = {
+            id: `assistant-${Date.now()}`,
+            role: 'assistant',
+            content: '',
+            timestamp: new Date().toISOString(),
+            isStreaming: true
+        };
+
+        this.addMessageToChat(assistantMessage);
+
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                
+                if (done) break;
+
+                const chunk = decoder.decode(value);
+                const lines = chunk.split('\n');
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const data = line.slice(6);
+                        
+                        if (data === '[DONE]') {
+                            await this.completeStreamingMessage(assistantMessage.id);
+                            return;
+                        }
+
+                        try {
+                            const eventData = JSON.parse(data);
+                            await this.handleStreamingEvent(assistantMessage.id, eventData);
+                        } catch (error) {
+                            console.warn('Failed to parse streaming data:', data);
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Streaming error:', error);
+            this.showStreamingError(assistantMessage.id, error.message);
+        }
+    }
+
+    async handleStreamingEvent(messageId, eventData) {
+        const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (!messageElement) return;
+
+        const contentElement = messageElement.querySelector('.message-content');
+        if (!contentElement) return;
+
+        // Handle different event types
+        switch (eventData.event) {
+            case 'RunStarted':
+                // Initialize streaming for this message
+                appState.currentStreamingMessage = '';
+                contentElement.innerHTML = '<span class="streaming-cursor">▊</span>';
+                break;
+                
+            case 'RunResponse':
+            case 'content':
+            case 'delta':
+                const newContent = eventData.content || eventData.data?.content || '';
+                if (newContent) {
+                    appState.currentStreamingMessage = appState.currentStreamingMessage || '';
+                    appState.currentStreamingMessage += newContent;
+                    contentElement.innerHTML = this.formatMessageContent(appState.currentStreamingMessage, 'assistant') + 
+                                             '<span class="streaming-cursor">▊</span>';
+                    sessionManager.scrollToBottom();
+                }
+                break;
+                
+            case 'completed':
+            case 'RunCompleted':
+                await this.completeStreamingMessage(messageId);
+                break;
+                
+            case 'error':
+                this.showStreamingError(messageId, eventData.error || eventData.message || 'Unknown error');
+                break;
+                
+            case 'keepalive':
+                // Do nothing for keepalive events
+                break;
+                
+            default:
+                console.log('Unknown streaming event:', eventData.event, eventData);
+        }
+    }
+
+    async completeStreamingMessage(messageId) {
+        const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (!messageElement) return;
+
+        const contentElement = messageElement.querySelector('.message-content');
+        const timeElement = messageElement.querySelector('.message-time');
+        if (!contentElement) return;
+
+        // Remove streaming cursor and finalize content
+        contentElement.innerHTML = this.formatMessageContent(appState.currentStreamingMessage || '', 'assistant');
+        messageElement.classList.remove('streaming');
+        
+        // Update the timestamp to include model information
+        if (timeElement) {
+            const timestamp = new Date().toLocaleTimeString();
+            const model = appState.aiConfig.model;
+            if (model) {
+                // Extract just the model name part
+                const modelName = model.split('/').pop().split(':')[0];
+                timeElement.textContent = `${timestamp} • ${modelName}`;
+            } else {
+                timeElement.textContent = timestamp;
+            }
+        }
+        
+        appState.currentStreamingMessage = null;
+        sessionManager.scrollToBottom();
+
+        // Refresh session data to update statistics after streaming completes
+        await this.refreshSessionData();
+    }
+
+    showStreamingError(messageId, errorMessage) {
+        const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (!messageElement) return;
+
+        const contentElement = messageElement.querySelector('.message-content');
+        if (!contentElement) return;
+
+        contentElement.innerHTML = `<div class="error-message">Error: ${errorMessage}</div>`;
+        messageElement.classList.remove('streaming');
+        messageElement.classList.add('error');
+        
+        appState.currentStreamingMessage = null;
+    }
+
+    addAssistantMessage(content) {
+        const message = {
+            id: `assistant-${Date.now()}`,
+            role: 'assistant',
+            content: content,
+            timestamp: new Date().toISOString()
+        };
+
+        this.addMessageToChat(message);
+    }
+
+    addErrorMessage(content) {
+        const message = {
+            id: `error-${Date.now()}`,
+            role: 'assistant',
+            content: `❌ ${content}`,
+            timestamp: new Date().toISOString(),
+            isError: true
+        };
+
+        this.addMessageToChat(message);
+    }
+
+    addMessageToChat(message) {
+        // Hide welcome screen and no-messages
+        dom.hideElement(dom.elements.welcomeScreen);
+        const noMessages = dom.elements.chatMessages.querySelector('.no-messages');
+        if (noMessages) dom.hideElement(noMessages);
+
+        const messageHTML = sessionManager.createMessageElement(message);
+        const messageElement = document.createElement('div');
+        messageElement.innerHTML = messageHTML;
+        
+        const messageNode = messageElement.firstElementChild;
+        if (message.isStreaming) {
+            messageNode.classList.add('streaming');
+        }
+        if (message.isError) {
+            messageNode.classList.add('error');
+        }
+
+        dom.elements.chatMessages.appendChild(messageNode);
+        sessionManager.scrollToBottom();
+    }
+
+    formatMessageContent(content, role) {
+        return sessionManager.formatMessageContent(content, role);
+    }
+
+    autoResizeTextarea(textarea) {
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    }
+}
+
+const chatManager = new ChatManager();
+
+// Event Handlers
+function setupEventHandlers() {
+    // Session management
+    dom.elements.newSessionBtn?.addEventListener('click', () => sessionManager.createSession());
+    dom.elements.welcomeNewSessionBtn?.addEventListener('click', () => sessionManager.createSession());
+    dom.elements.refreshSessionsBtn?.addEventListener('click', () => sessionManager.loadSessions());
+
+    // Pagination
+    dom.elements.prevPageBtn?.addEventListener('click', async () => {
+        if (appState.pagination.page > 1) {
+            await sessionManager.loadSessions(appState.pagination.page - 1);
+        }
+    });
     
-    return parseConversationTurns(conversationHistory.conversation_turns);
+    dom.elements.nextPageBtn?.addEventListener('click', async () => {
+        const totalPages = Math.ceil(appState.pagination.total / appState.pagination.pageSize);
+        if (appState.pagination.page < totalPages) {
+            await sessionManager.loadSessions(appState.pagination.page + 1);
+        }
+    });
+
+    // Search functionality
+    let searchTimeout;
+    dom.elements.sessionSearch?.addEventListener('input', (e) => {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => {
+            searchSessions(e.target.value);
+        }, 300);
+    });
+
+    // Chat form
+    dom.elements.chatForm?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const message = dom.elements.messageInput?.value.trim();
+        if (message) {
+            await chatManager.sendMessage(message);
+        }
+    });
+
+    // Input auto-resize
+    dom.elements.messageInput?.addEventListener('input', (e) => {
+        chatManager.autoResizeTextarea(e.target);
+    });
+
+    // Keyboard shortcuts
+    dom.elements.messageInput?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            dom.elements.chatForm?.requestSubmit();
+        }
+    });
+
+    // Export functionality
+    dom.elements.exportBtn?.addEventListener('click', exportConversation);
+    
+    // Settings functionality  
+    dom.elements.settingsBtn?.addEventListener('click', openSettings);
 }
 
-/**
- * Extract session metadata
- */
-function extractSessionMetadata(sessionData) {
-    return {
-        id: sessionData.session_id || sessionData.id,
-        name: sessionData.name || `Session ${sessionData.session_id?.substring(0, 8) || 'Unknown'}`,
-        status: sessionData.status || 'unknown',
-        messageCount: sessionData.message_count || 0,
-        metadata: sessionData.metadata || {}
-    };
+// Utility Functions
+function searchSessions(query) {
+    const filteredSessions = appState.sessions.filter(session => {
+        const name = session.name || '';
+        return name.toLowerCase().includes(query.toLowerCase());
+    });
+
+    // Re-render with filtered sessions
+    const originalSessions = appState.sessions;
+    appState.sessions = filteredSessions;
+    sessionManager.renderSessions();
+    appState.sessions = originalSessions;
 }
 
-/**
- * Cleanup function when page unloads
- */
-window.addEventListener('beforeunload', function() {
-    // SSE cleanup removed - using direct streaming
-});
+async function exportConversation() {
+    if (!appState.currentSessionId) {
+        notifications.warning('No session selected for export');
+        return;
+    }
 
-// === Backend Connection Test ===
+    try {
+        const sessionData = await apiClient.getSession(appState.currentSessionId);
+        const blob = new Blob([JSON.stringify(sessionData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `obelisk-chat-${sessionData.session_id.substring(0, 8)}-${new Date().toISOString().split('T')[0]}.json`;
+        a.click();
+        
+        URL.revokeObjectURL(url);
+        notifications.success('Conversation exported successfully');
+    } catch (error) {
+        console.error('Export failed:', error);
+        notifications.error('Failed to export conversation');
+    }
+}
+
+function openSettings() {
+    notifications.warning('Settings panel coming soon');
+}
+
 async function testBackendConnection() {
     try {
-        console.log('Testing backend connection...');
-        const response = await fetch(`${BACKEND_API_URL}/health`);
+        const response = await fetch(`${API_CONFIG.BACKEND_URL}/health`);
         if (response.ok) {
-            const data = await response.json();
-            console.log('✅ Backend connection successful:', data);
+            console.log('✅ Backend connection successful');
         } else {
-            console.warn('⚠️ Backend health check failed:', response.status);
+            console.warn('⚠️ Backend health check failed');
         }
     } catch (error) {
         console.error('❌ Backend connection failed:', error);
-        showError('Backend connection failed. Some features may not work.');
+        notifications.error('Backend connection failed. Some features may not work properly.');
     }
-} 
+}
+
+// Application Initialization
+async function initializeApp() {
+    console.log('Initializing Obelisk Chat Platform...');
+    
+    // Load saved state
+    appState.loadState();
+    
+    // Setup event handlers
+    setupEventHandlers();
+    
+    // Initialize config manager
+    const configManager = new ConfigManager();
+    
+    // Initialize chat input state
+    sessionManager.disableChatInput();
+    
+    // Test backend connection
+    await testBackendConnection();
+    
+    // Load sessions
+    await sessionManager.loadSessions(appState.pagination.page);
+    
+    console.log('✅ Obelisk Chat Platform initialized successfully');
+}
+
+// Start the application
+document.addEventListener('DOMContentLoaded', initializeApp); 

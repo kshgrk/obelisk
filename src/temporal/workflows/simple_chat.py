@@ -27,6 +27,7 @@ class SimpleChatWorkflow:
     async def run(self, 
                   session_id: str, 
                   user_message: str, 
+                  config_override: Optional[Dict[str, Any]] = None,
                   streaming: bool = False) -> Dict[str, Any]:
         """
         Process a complete conversation turn atomically
@@ -67,14 +68,19 @@ class SimpleChatWorkflow:
                 "content": user_message
             })
             
+            # Use config_override for model or fallback to default
+            model = config_override.get("model", "deepseek/deepseek-chat-v3-0324:free") if config_override else "deepseek/deepseek-chat-v3-0324:free"
+            temperature = config_override.get("temperature", 0.7) if config_override else 0.7
+            max_tokens = config_override.get("max_tokens", 1000) if config_override else 1000
+            
             if streaming:
                 ai_response = await workflow.execute_activity(
                     "stream_chat",
                     args=[{
-                        "model": "deepseek/deepseek-chat-v3-0324:free",
+                        "model": model,
                         "messages": openrouter_messages,
-                        "temperature": 0.7,
-                        "max_tokens": 1000,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
                         "stream": True,
                         "session_id": session_id  # Add session_id for event emission
                     }],
@@ -85,10 +91,10 @@ class SimpleChatWorkflow:
                 ai_response = await workflow.execute_activity(
                     "chat_completion",
                     args=[{
-                        "model": "deepseek/deepseek-chat-v3-0324:free", 
+                        "model": model, 
                         "messages": openrouter_messages,
-                        "temperature": 0.7,
-                        "max_tokens": 1000,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
                         "stream": False,
                         "session_id": session_id  # Add session_id for event emission
                     }],
@@ -113,13 +119,22 @@ class SimpleChatWorkflow:
                     "streaming": streaming
                 },
                 "assistant_metadata": {
-                    "model": "deepseek/deepseek-chat-v3-0324:free",
+                    "model": ai_response.get("model", model),
                     "tokens_input": ai_response.get("usage", {}).get("prompt_tokens", 0),
                     "tokens_output": ai_response.get("usage", {}).get("completion_tokens", 0),
                     "response_time_ms": ai_response.get("response_time_ms", 0),
                     "streaming": streaming,
                     "finish_reason": ai_response.get("finish_reason", "stop")
                 }
+            }
+            
+            # Build generation config that was actually used
+            generation_config = {
+                "model": model,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "streaming": streaming,
+                "show_tool_calls": True  # Default for now
             }
             
             # Build conversation turn with EXPLICIT field-by-field ordering
@@ -146,6 +161,7 @@ class SimpleChatWorkflow:
             assistant_resp["mcp_calls"] = []
             assistant_resp["metadata"] = {
                 "generation_type": "original",
+                "generation_config": generation_config,
                 **metadata.get("assistant_metadata", {})
             }
             self.current_turn["assistant_responses"] = [assistant_resp]
@@ -226,12 +242,14 @@ class SimpleStreamingChatWorkflow:
     @workflow.run
     async def run(self, 
                   session_id: str, 
-                  user_message: str) -> Dict[str, Any]:
+                  user_message: str,
+                  config_override: Optional[Dict[str, Any]] = None,
+                  streaming: bool = True) -> Dict[str, Any]:
         """
         Process streaming chat with conversation_turns structure
         """
         # Delegate to main workflow with streaming=True
-        return await SimpleChatWorkflow().run(session_id, user_message, streaming=True)
+        return await SimpleChatWorkflow().run(session_id, user_message, config_override, streaming=True)
 
 
 @workflow.defn 
@@ -277,7 +295,7 @@ class ChatSessionWorkflow:
         workflow.logger.info(f"Received message in session {self.session_id}")
         
         # Process the message using the same fault-tolerant logic
-        result = await SimpleChatWorkflow().run(self.session_id, user_message, streaming)
+        result = await SimpleChatWorkflow().run(self.session_id, user_message, None, streaming)
         
         # Update in-memory context (for fast access)
         if result.get("success"):

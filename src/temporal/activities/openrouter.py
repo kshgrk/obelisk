@@ -40,8 +40,11 @@ class OpenRouterActivities:
                 "X-Title": "Obelisk Chat Server"  # Optional
             }
             
+            # Use model from request, fallback to settings
+            model = request_data.get("model", settings.openrouter.model)
+            
             payload = {
-                "model": settings.openrouter.model,
+                "model": model,
                 "messages": request_data["messages"],
                 "temperature": request_data.get("temperature", settings.openrouter.temperature),
                 "max_tokens": request_data.get("max_tokens", settings.openrouter.max_tokens),
@@ -120,8 +123,11 @@ class OpenRouterActivities:
                 "X-Title": "Obelisk Chat Server"
             }
             
+            # Use model from request, fallback to settings
+            model = request_data.get("model", settings.openrouter.model)
+            
             payload = {
-                "model": settings.openrouter.model,
+                "model": model,
                 "messages": request_data["messages"],
                 "temperature": request_data.get("temperature", settings.openrouter.temperature),
                 "max_tokens": request_data.get("max_tokens", settings.openrouter.max_tokens),
@@ -140,6 +146,7 @@ class OpenRouterActivities:
                 "event": "RunStarted",
                 "content": "Run started",
                 "content_type": "str",
+                "member_responses": [],
                 "run_id": run_id,
                 "session_id": session_id,
                 "created_at": int(time.time())
@@ -195,6 +202,7 @@ class OpenRouterActivities:
                                             "event": "RunResponse",
                                             "content": content,
                                             "content_type": "str",
+                                            "member_responses": [],
                                             "run_id": run_id,
                                             "session_id": session_id,
                                             "created_at": int(time.time())
@@ -216,16 +224,40 @@ class OpenRouterActivities:
             
             response_time = time.time() - start_time
             
-            # Emit completion event
+            # Emit completion event with full metadata
             completion_event = {
                 "event": "RunCompleted",
                 "content": full_content,
                 "content_type": "str",
+                "model": model,
+                "member_responses": [],
                 "run_id": run_id,
                 "session_id": session_id,
                 "created_at": int(time.time()),
-                "final_content": full_content,
-                "refresh_conversation": True
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": request_data["messages"][-1]["content"] if request_data["messages"] else "",
+                        "from_history": False,
+                        "stop_after_tool_call": False,
+                        "created_at": int(start_time)
+                    },
+                    {
+                        "role": "assistant",
+                        "content": full_content,
+                        "from_history": False,
+                        "stop_after_tool_call": False,
+                        "metrics": {
+                            "input_tokens": 0,  # Will be populated by actual API response if available
+                            "output_tokens": 0,  # Will be populated by actual API response if available
+                            "total_tokens": 0,   # Will be populated by actual API response if available
+                            "time": response_time,
+                            "time_to_first_token": 0  # Could be calculated if needed
+                        },
+                        "model": model,
+                        "created_at": int(start_time)
+                    }
+                ]
             }
             
             try:
@@ -241,7 +273,7 @@ class OpenRouterActivities:
             
             return {
                 "content": full_content,
-                "model": settings.openrouter.model,
+                "model": model,
                 "response_time_ms": response_time * 1000,
                 "chunk_count": chunk_count,
                 "streaming": True,

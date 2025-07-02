@@ -35,7 +35,7 @@ class DatabaseManager:
                     status TEXT DEFAULT 'active' CHECK(status IN ('active', 'inactive', 'archived')),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    session_metadata JSON DEFAULT '{}',
+                    session_data JSON DEFAULT '{}',
                     conversation_history JSON DEFAULT '{"conversation_turns": []}'
                 )
             """)
@@ -84,26 +84,27 @@ class DatabaseManager:
             async with self.get_connection() as db:
                 await db.execute("BEGIN")
                 try:
-                    # Initialize session metadata
-                    session_metadata = {
-                        "total_messages": 0,
-                        "total_turns": 0,
-                        "model": "deepseek/deepseek-chat-v3-0324:free",
-                        "settings": {
+                    # Initialize session data with proper structure matching examples
+                    session_data_obj = {
+                        "config": {
+                            "model": "deepseek/deepseek-chat-v3-0324:free",
                             "temperature": 0.7,
                             "max_tokens": 1000,
-                            "streaming": True
+                            "streaming": True,
+                            "show_tool_calls": True
                         },
                         "statistics": {
                             "total_tokens_input": 0,
                             "total_tokens_output": 0,
-                            "total_response_time_ms": 0,
-                            "average_response_time_ms": 0
+                            "last_response_time_ms": 0.0,
+                            "average_response_time_ms": 0.0,
+                            "total_response_time_ms": 0.0
                         },
-                        "features_used": ["chat"],
-                        "user_preferences": {
-                            "streaming": True,
-                            "show_tool_calls": True
+                        "metadata": {
+                            "total_messages": 0,
+                            "total_turns": 0,
+                            "features_used": ["chat"],
+                            "last_updated": datetime.utcnow().isoformat()
                         }
                     }
                     
@@ -115,7 +116,7 @@ class DatabaseManager:
                     now = datetime.utcnow().isoformat()
                     await db.execute(
                         """INSERT INTO sessions 
-                           (session_id, name, status, created_at, updated_at, session_metadata, conversation_history)
+                           (session_id, name, status, created_at, updated_at, session_data, conversation_history)
                            VALUES (?, ?, ?, ?, ?, ?, ?)""",
                         (
                             session_id,
@@ -123,7 +124,7 @@ class DatabaseManager:
                             "active",  # Default status since ChatSessionCreate doesn't have status
                             now,
                             now,
-                            json.dumps(session_metadata),
+                            json.dumps(session_data_obj),
                             json.dumps(conversation_history)
                         )
                     )
@@ -137,7 +138,7 @@ class DatabaseManager:
                         status=SessionStatus.ACTIVE,
                         created_at=datetime.fromisoformat(now.replace('Z', '+00:00')),
                         updated_at=datetime.fromisoformat(now.replace('Z', '+00:00')),
-                        metadata=session_metadata,
+                        metadata=session_data_obj.get('metadata', {}),
                         message_count=0
                     )
                     
@@ -157,7 +158,7 @@ class DatabaseManager:
                 try:
                     # Get current conversation
                     cursor = await db.execute(
-                        "SELECT conversation_history, session_metadata FROM sessions WHERE session_id = ?",
+                        "SELECT conversation_history, session_data FROM sessions WHERE session_id = ?",
                         (session_id,)
                     )
                     row = await cursor.fetchone()
@@ -167,7 +168,15 @@ class DatabaseManager:
                     
                     # Parse current data
                     conversation = json.loads(row['conversation_history'])
-                    metadata = json.loads(row['session_metadata'])
+                    session_data = json.loads(row['session_data']) if row['session_data'] else {}
+                    
+                    # Get metadata from session_data (with fallback structure)
+                    metadata = session_data.get('metadata', {
+                        'total_messages': 0,
+                        'total_turns': 0,
+                        'features_used': ['chat'],
+                        'last_updated': datetime.utcnow().isoformat()
+                    })
                     
                     # Set correct turn number and ensure proper field ordering
                     turn_number = len(conversation['conversation_turns']) + 1
@@ -211,14 +220,17 @@ class DatabaseManager:
                     )
                     metadata['last_updated'] = datetime.utcnow().isoformat()
                     
+                    # Update session_data with new metadata
+                    session_data['metadata'] = metadata
+                    
                     # Update session (JSON-only storage with preserved ordering)
                     await db.execute(
                         """UPDATE sessions 
-                           SET conversation_history = ?, session_metadata = ?, updated_at = ?
+                           SET conversation_history = ?, session_data = ?, updated_at = ?
                            WHERE session_id = ?""",
                         (
                             json.dumps(conversation, sort_keys=False),
-                            json.dumps(metadata, sort_keys=False),
+                            json.dumps(session_data, sort_keys=False),
                             datetime.utcnow().isoformat(),
                             session_id
                         )
@@ -266,7 +278,7 @@ class DatabaseManager:
             async with self.get_connection() as db:
                 cursor = await db.execute(
                     """SELECT session_id, name, status, created_at, updated_at, 
-                              session_metadata, conversation_history 
+                              session_data, conversation_history 
                        FROM sessions WHERE session_id = ?""",
                     (session_id,)
                 )
@@ -291,8 +303,9 @@ class DatabaseManager:
                     except (ValueError, AttributeError):
                         updated_at = datetime.utcnow()
                 
-                # Parse metadata and get message count
-                metadata = json.loads(row['session_metadata']) if row['session_metadata'] else {}
+                # Parse session data and get metadata
+                session_data = json.loads(row['session_data']) if row['session_data'] else {}
+                metadata = session_data.get('metadata', {})
                 conversation = json.loads(row['conversation_history']) if row['conversation_history'] else {"conversation_turns": []}
                 message_count = metadata.get('total_messages', 0)
                 
@@ -315,7 +328,7 @@ class DatabaseManager:
         try:
             async with self.get_connection() as db:
                 cursor = await db.execute(
-                    """SELECT session_id, name, status, created_at, updated_at, session_metadata
+                    """SELECT session_id, name, status, created_at, updated_at, session_data
                        FROM sessions 
                        ORDER BY updated_at DESC 
                        LIMIT ? OFFSET ?""",
@@ -340,7 +353,9 @@ class DatabaseManager:
                         except (ValueError, AttributeError):
                             updated_at = datetime.utcnow()
                     
-                    metadata = json.loads(row['session_metadata']) if row['session_metadata'] else {}
+                    # Parse session data and get metadata
+                    session_data = json.loads(row['session_data']) if row['session_data'] else {}
+                    metadata = session_data.get('metadata', {})
                     
                     sessions.append(ChatSession(
                         id=row['session_id'],

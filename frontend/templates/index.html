@@ -3,231 +3,261 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Obelisk Chat</title>
+    <title>Obelisk Chat Platform</title>
     <link rel="stylesheet" href="{{ url_for('static', path='/css/styles.css') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="app-container">
-        <!-- Sidebar -->
+        <!-- Navigation Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
-                <h1 class="app-title">Obelisk Chat</h1>
-                <button class="new-session-btn" title="Create New Session">
-                    <span>+</span> New Chat
+                <div class="brand">
+                    <h1 class="brand-title">Obelisk</h1>
+                    <span class="brand-subtitle">Chat Platform</span>
+                </div>
+                <button class="btn btn-primary new-session-btn" id="newSessionBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="m12 5-7 7 7 7"/>
+                        <path d="m19 12H5"/>
+                    </svg>
+                    New Session
                 </button>
             </div>
             
             <div class="sidebar-content">
-                <!-- Session Search -->
-                <div class="session-search-container">
-                    <input type="text" class="session-search" placeholder="Search sessions...">
-                </div>
-                
                 <!-- Session Controls -->
                 <div class="session-controls">
-                    <button class="refresh-sessions-btn" title="Refresh Sessions">
-                        <span>↻</span> Refresh
+                    <div class="search-container">
+                        <input type="text" class="search-input" placeholder="Search sessions..." id="sessionSearch">
+                        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"/>
+                            <path d="m21 21-4.35-4.35"/>
+                        </svg>
+                    </div>
+                    <button class="btn btn-secondary refresh-btn" id="refreshSessionsBtn" title="Refresh Sessions">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c2.39 0 4.584.926 6.207 2.438L21 8"/>
+                            <path d="M21 3v5h-5"/>
+                        </svg>
+                        Refresh
                     </button>
                 </div>
                 
                 <!-- Session List -->
-                <div class="session-list">
-                    <!-- Sessions will be populated by JavaScript -->
-                    <div class="loading">Loading sessions...</div>
-                </div>
-                
-                <!-- Pagination -->
-                <div class="pagination">
-                    <!-- Pagination controls will be populated by JavaScript -->
+                <div class="session-list-container">
+                    <div class="session-list" id="sessionList">
+                        <div class="loading-state">
+                            <div class="spinner"></div>
+                            <span>Loading sessions...</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Pagination -->
+                    <div class="pagination" id="pagination" style="display: none;">
+                        <button class="btn btn-ghost" id="prevPageBtn">Previous</button>
+                        <span class="pagination-info" id="paginationInfo">Page 1 of 1</span>
+                        <button class="btn btn-ghost" id="nextPageBtn">Next</button>
+                    </div>
                 </div>
             </div>
         </aside>
 
-        <!-- Main Content -->
+        <!-- Main Content Area -->
         <main class="main-content">
             <!-- Chat Header -->
             <header class="chat-header">
-                <div class="session-info-container">
-                    <h2 class="session-title-header">Select a session</h2>
-                    <div class="session-info">
-                        <span>Choose a session from the sidebar to start chatting</span>
+                <div class="session-info">
+                    <h2 class="session-title" id="sessionTitle">Select a Session</h2>
+                    <div class="session-metadata" id="sessionMetadata">
+                        <span class="status-indicator">Choose a session to begin</span>
                     </div>
                 </div>
                 
-                <div class="chat-actions">
-                    <button class="action-btn" title="Session Settings">
-                        <span>⚙️</span>
+                <div class="header-actions">
+                    <button class="btn btn-ghost" id="configBtn" title="AI Configuration">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"/>
+                            <path d="M12 2v2"/>
+                            <path d="M12 20v2"/>
+                            <path d="m4.93 4.93 1.41 1.41"/>
+                            <path d="m17.66 17.66 1.41 1.41"/>
+                            <path d="M2 12h2"/>
+                            <path d="M20 12h2"/>
+                            <path d="m6.34 17.66-1.41 1.41"/>
+                            <path d="m19.07 4.93-1.41 1.41"/>
+                        </svg>
+                        AI Config
                     </button>
-                    <button class="action-btn" title="Export Chat">
-                        <span>📥</span>
+                    <button class="btn btn-ghost" id="exportBtn" title="Export Conversation">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="7,10 12,15 17,10"/>
+                            <line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                        Export
+                    </button>
+                    <button class="btn btn-ghost" id="settingsBtn" title="Session Settings">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="m12 1 2.09 2.25L17 2l.75 3.25L24 6l-2.25 2.09L23 11l-3.25.75L18 15l-2.09-2.25L13 14l-.75-3.25L6 12l2.25-2.09L7 7l3.25-.75L12 1z"/>
+                        </svg>
+                        Settings
                     </button>
                 </div>
             </header>
 
-            <!-- Chat Messages -->
-            <div class="chat-container">
-                <div class="chat-messages">
-                    <!-- Welcome message when no session is selected -->
-                    <div class="welcome-message">
+            <!-- Chat Messages Area -->
+            <div class="chat-container" id="chatContainer">
+                <div class="chat-messages" id="chatMessages">
+                    <!-- Welcome Screen -->
+                    <div class="welcome-screen" id="welcomeScreen">
                         <div class="welcome-content">
-                            <h3>Welcome to Obelisk Chat</h3>
-                            <p>Select an existing session from the sidebar or create a new one to start chatting.</p>
+                            <div class="welcome-icon">
+                                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                    <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>
+                                </svg>
+                            </div>
+                            <h3>Welcome to Obelisk Chat Platform</h3>
+                            <p>Select an existing session from the sidebar or create a new one to begin your conversation.</p>
                             <div class="welcome-actions">
-                                <button class="new-session-btn primary">Start New Chat</button>
+                                <button class="btn btn-primary" id="welcomeNewSessionBtn">
+                                    Create New Session
+                                </button>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Chat Input -->
-            <footer class="chat-input-container">
+            <!-- Chat Input Area -->
+            <footer class="chat-input-area" id="chatInputArea">
                 <form class="chat-form" id="chatForm">
-                    <div class="input-wrapper">
-                        <textarea 
-                            class="chat-input" 
-                            id="messageInput"
-                            placeholder="Type your message here..."
-                            rows="1"
-                            disabled
-                        ></textarea>
-                        <div class="input-actions">
-                            <button type="button" class="attach-btn" title="Attach File" disabled>
-                                <span>📎</span>
-                            </button>
-                            <button type="submit" class="send-btn" title="Send Message" disabled>
-                                <span>➤</span>
-                            </button>
+                    <div class="input-container">
+                        <div class="input-wrapper">
+                            <textarea 
+                                class="message-input" 
+                                id="messageInput"
+                                placeholder="Type your message..."
+                                rows="1"
+                                disabled
+                            ></textarea>
+                            <div class="input-actions">
+                                <button type="button" class="btn btn-ghost input-btn" id="attachBtn" title="Attach File" disabled>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.64 16.2a2 2 0 0 1-2.83-2.83l8.49-8.49"/>
+                                    </svg>
+                                </button>
+                                <button type="submit" class="btn btn-primary input-btn" id="sendBtn" title="Send Message" disabled>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <line x1="22" y1="2" x2="11" y2="13"/>
+                                        <polygon points="22,2 15,22 11,13 2,9 22,2"/>
+                                    </svg>
+                                </button>
+                            </div>
                         </div>
-                    </div>
-                    <div class="input-hint">
-                        Press Shift+Enter for new line, Enter to send
+                        <div class="input-footer">
+                            <span class="input-hint">Press Shift+Enter for new line, Enter to send</span>
+                            <div class="message-info" id="messageInfo"></div>
+                        </div>
                     </div>
                 </form>
             </footer>
         </main>
     </div>
 
-    <!-- Error notifications will be appended here by JavaScript -->
-    
+    <!-- Notification Container -->
+    <div class="notification-container" id="notificationContainer"></div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+        <div class="loading-content">
+            <div class="spinner large"></div>
+            <span>Processing...</span>
+        </div>
+    </div>
+
+    <!-- AI Configuration Modal -->
+    <div class="modal-overlay" id="configModal" style="display: none;">
+        <div class="modal-content config-modal">
+            <div class="modal-header">
+                <h3 class="modal-title">AI Configuration</h3>
+                <button class="btn btn-ghost modal-close" id="closeConfigModal">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            
+            <div class="modal-body">
+                <div class="config-section">
+                    <h4 class="config-section-title">Model Selection</h4>
+                    <div class="config-group">
+                        <label class="config-label">AI Model</label>
+                        <select class="config-select" id="modelSelect">
+                            <option value="qwen/qwen3-235b-a22b:free">Qwen 3.2 235B (Free)</option>
+                            <option value="deepseek/deepseek-r1-0528:free">DeepSeek R1 (Free)</option>
+                            <option value="mistralai/mistral-small-3.2-24b-instruct:free">Mistral Small 3.2 (Free)</option>
+                            <option value="deepseek/deepseek-chat-v3-0324:free" selected>DeepSeek Chat v3 (Default)</option>
+                        </select>
+                        <p class="config-description">Choose the AI model for your conversations. Different models have varying capabilities and response styles.</p>
+                    </div>
+                </div>
+
+                <div class="config-section">
+                    <h4 class="config-section-title">Generation Parameters</h4>
+                    
+                    <div class="config-group">
+                        <label class="config-label">Temperature: <span id="temperatureValue">1.0</span></label>
+                        <input type="range" class="config-slider" id="temperatureSlider" 
+                               min="0" max="2" step="0.1" value="1.0">
+                        <p class="config-description">Controls randomness. Lower values make responses more focused and deterministic.</p>
+                    </div>
+
+                    <div class="config-group">
+                        <label class="config-label">Max Tokens</label>
+                        <input type="number" class="config-input" id="maxTokensInput" 
+                               min="100" max="10000" step="100" value="5000" placeholder="5000">
+                        <p class="config-description">Maximum length of the AI response. Higher values allow longer responses.</p>
+                    </div>
+                </div>
+
+                <div class="config-section">
+                    <h4 class="config-section-title">Preview</h4>
+                    <div class="config-preview">
+                        <div class="preview-item">
+                            <span class="preview-label">Model:</span>
+                            <span class="preview-value" id="previewModel">DeepSeek Chat v3 (Default)</span>
+                        </div>
+                        <div class="preview-item">
+                            <span class="preview-label">Temperature:</span>
+                            <span class="preview-value" id="previewTemperature">1.0</span>
+                        </div>
+                        <div class="preview-item">
+                            <span class="preview-label">Max Tokens:</span>
+                            <span class="preview-value" id="previewMaxTokens">5000</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn btn-ghost" id="resetConfigBtn">Reset to Defaults</button>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="cancelConfigBtn">Cancel</button>
+                    <button class="btn btn-primary" id="saveConfigBtn">Apply Configuration</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="{{ url_for('static', path='/js/parsers.js') }}"></script>
     <script src="{{ url_for('static', path='/js/conversation-parser.js') }}"></script>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script>
-        // Debug script to check if marked loaded properly
-        document.addEventListener('DOMContentLoaded', function() {
-            if (typeof marked === 'undefined') {
-                console.error('Marked library failed to load from CDN, attempting fallback...');
-                // Try to load from alternative CDN
-                const script = document.createElement('script');
-                script.src = 'https://unpkg.com/marked/marked.min.js';
-                script.onload = function() {
-                    console.log('Marked library loaded from fallback CDN');
-                };
-                script.onerror = function() {
-                    console.error('All CDN sources for marked library failed');
-                };
-                document.head.appendChild(script);
-            } else {
-                console.log('Marked library loaded successfully, version:', marked.version || 'unknown');
-            }
-        });
-    </script>
     <script src="{{ url_for('static', path='/js/main.js') }}"></script>
-    <script>
-        // Additional inline JavaScript for form handling
-        document.addEventListener('DOMContentLoaded', function() {
-            const chatForm = document.getElementById('chatForm');
-            const messageInput = document.getElementById('messageInput');
-            const sendBtn = document.querySelector('.send-btn');
-            
-            // Enable input when a session is loaded
-            function enableChatInput() {
-                messageInput.disabled = false;
-                sendBtn.disabled = false;
-                document.querySelector('.attach-btn').disabled = false;
-                messageInput.placeholder = "Type your message here...";
-            }
-            
-            // Disable input when no session is selected
-            function disableChatInput() {
-                messageInput.disabled = true;
-                sendBtn.disabled = true;
-                document.querySelector('.attach-btn').disabled = true;
-                messageInput.placeholder = "Select a session to start chatting...";
-            }
-            
-            // Auto-resize textarea
-            messageInput.addEventListener('input', function() {
-                this.style.height = 'auto';
-                this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-            });
-            
-            // Handle Enter key (send message) vs Shift+Enter (new line)
-            messageInput.addEventListener('keydown', function(e) {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    if (!this.disabled && this.value.trim()) {
-                        chatForm.dispatchEvent(new Event('submit'));
-                    }
-                }
-            });
-            
-            // Handle form submission
-            chatForm.addEventListener('submit', function(e) {
-                e.preventDefault();
-                
-                const message = messageInput.value.trim();
-                if (!message || !currentSessionId) return;
-                
-                // Add user message to chat (optimistic update)
-                addMessageToChat('user', message);
-                
-                // Clear input
-                messageInput.value = '';
-                messageInput.style.height = 'auto';
-                
-                // Send message using the main.js sendMessage function with direct streaming
-                if (window.sendMessage) {
-                    window.sendMessage(message);
-                } else {
-                    console.error('sendMessage function not available');
-                }
-            });
-            
-            // Global function to enable/disable chat input
-            window.enableChatInput = enableChatInput;
-            window.disableChatInput = disableChatInput;
-            
-            function hideWelcomeMessage() {
-                const welcomeMessage = document.querySelector('.welcome-message');
-                if (welcomeMessage) {
-                    welcomeMessage.style.display = 'none';
-                }
-            }
-            
-            function addMessageToChat(role, content) {
-                const chatMessages = document.querySelector('.chat-messages');
-                const messageDiv = document.createElement('div');
-                messageDiv.className = `message ${role}-message`;
-                
-                messageDiv.innerHTML = `
-                    <div class="message-content">${formatMessageContent(content, role)}</div>
-                    <div class="message-time">now</div>
-                `;
-                
-                chatMessages.appendChild(messageDiv);
-                chatMessages.scrollTop = chatMessages.scrollHeight;
-            }
-            
-            // Make addMessageToChat available globally
-            window.addMessageToChat = addMessageToChat;
-            
-            // Note: sendMessage is defined in main.js with proper direct streaming support
-        });
-    </script>
 </body>
 </html> 

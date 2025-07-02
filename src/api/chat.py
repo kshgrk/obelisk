@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 from src.config.settings import settings
 from src.temporal.client import temporal_client
-from src.temporal.workflows.simple_chat import SimpleChatWorkflow
+from src.temporal.workflows.simple_chat import SimpleChatWorkflow, SimpleStreamingChatWorkflow
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -35,6 +35,7 @@ class SimpleChatRequest(BaseModel):
     session_id: str
     message: str
     stream: Optional[bool] = True
+    config_override: Optional[dict] = None
 
 async def get_temporal_client():
     """Get connected Temporal client"""
@@ -44,7 +45,7 @@ async def get_temporal_client():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to connect to Temporal: {str(e)}")
 
-async def execute_temporal_workflow(session_id: str, message: str, streaming: bool = True) -> str:
+async def execute_temporal_workflow(session_id: str, message: str, config_override: Optional[dict] = None, streaming: bool = True) -> str:
     """Execute Temporal workflow for chat"""
     client = await get_temporal_client()
     
@@ -55,7 +56,7 @@ async def execute_temporal_workflow(session_id: str, message: str, streaming: bo
         # Always use SimpleChatWorkflow with streaming parameter
         workflow_handle = await client.start_workflow(
             SimpleChatWorkflow.run,
-            args=[session_id, message, streaming],
+            args=[session_id, message, config_override, streaming],
             id=workflow_id,
             task_queue=settings.temporal.task_queue,
         )
@@ -185,12 +186,13 @@ async def simple_chat(request: SimpleChatRequest):
         
         if request.stream:
             # For streaming: start workflow asynchronously and stream via SSE
-            return await start_streaming_workflow(request.session_id, request.message)
+            return await start_streaming_workflow(request.session_id, request.message, request.config_override)
         else:
             # For non-streaming: wait for workflow completion
             response_content = await execute_temporal_workflow(
                 session_id=request.session_id,
                 message=request.message,
+                config_override=request.config_override,
                 streaming=False
             )
             
@@ -207,7 +209,7 @@ async def simple_chat(request: SimpleChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-async def start_streaming_workflow(session_id: str, message: str):
+async def start_streaming_workflow(session_id: str, message: str, config_override: Optional[dict] = None):
     """
     Start Temporal workflow asynchronously and return real-time SSE stream
     """
@@ -223,8 +225,8 @@ async def start_streaming_workflow(session_id: str, message: str):
         
         # Start the streaming workflow asynchronously
         workflow_handle = await client.start_workflow(
-            SimpleChatWorkflow.run,
-            args=[session_id, message, True],
+            SimpleStreamingChatWorkflow.run,
+            args=[session_id, message, config_override, True],
             id=workflow_id,
             task_queue=settings.temporal.task_queue,
         )
@@ -243,7 +245,6 @@ async def start_streaming_workflow(session_id: str, message: str):
             active_streams[session_id].append(queue)
             
             try:
-                logger = logging.getLogger(__name__)
                 logger.info(f"Direct SSE stream started for session {session_id[:8]}")
                 
                 # Clear old events to prevent mixing with new request
