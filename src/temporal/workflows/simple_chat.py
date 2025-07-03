@@ -56,25 +56,13 @@ class SimpleChatWorkflow:
         )
         
         try:
-            # Step 0.5: Handle model switch if requested via config_override
+            # Step 0.5: Determine initial model (default or config override)
+            initial_model = "deepseek/deepseek-chat-v3-0324:free"  # Default model
             if config_override and config_override.get("model"):
-                requested_model = config_override["model"]
-                workflow.logger.info(f"Model switch requested via config_override: {requested_model}")
-                
-                # Switch the model in the dynamic tool registry
-                switch_result = await workflow.execute_activity(
-                    "switch_session_model_dynamic",
-                    args=[session_id, requested_model],
-                    start_to_close_timeout=timedelta(seconds=15),
-                    retry_policy=retry_policy,
-                )
-                
-                if switch_result.get("success"):
-                    workflow.logger.info(f"Model switch successful: {switch_result.get('old_model')} → {switch_result.get('new_model')}")
-                else:
-                    workflow.logger.warning(f"Model switch failed: {switch_result.get('error', 'Unknown error')}")
+                initial_model = config_override["model"]
+                workflow.logger.info(f"Model override requested via config_override: {initial_model}")
             
-            # Step 0.6: Get current model from dynamic tool registry (this is the authoritative source)
+            # Step 0.6: Get current model from dynamic tool registry (check if session exists)
             current_session_state = await workflow.execute_activity(
                 "get_session_tool_state",
                 args=[session_id],
@@ -83,12 +71,32 @@ class SimpleChatWorkflow:
             )
             
             if current_session_state.get("success") and current_session_state.get("current_model"):
-                model = current_session_state["current_model"]
-                workflow.logger.info(f"Using current session model from dynamic registry: {model}")
+                # Session already exists, check if model switch is needed
+                current_model = current_session_state["current_model"]
+                workflow.logger.info(f"Found existing session with model: {current_model}")
+                
+                if initial_model != current_model:
+                    # Switch to requested model
+                    workflow.logger.info(f"Switching model from {current_model} to {initial_model}")
+                    switch_result = await workflow.execute_activity(
+                        "switch_session_model_dynamic",
+                        args=[session_id, initial_model],
+                        start_to_close_timeout=timedelta(seconds=15),
+                        retry_policy=retry_policy,
+                    )
+                    
+                    if switch_result.get("success"):
+                        workflow.logger.info(f"Model switch successful: {switch_result.get('old_model')} → {switch_result.get('new_model')}")
+                        model = initial_model
+                    else:
+                        workflow.logger.warning(f"Model switch failed: {switch_result.get('error', 'Unknown error')}")
+                        model = current_model  # Keep current model if switch fails
+                else:
+                    model = current_model
             else:
-                # Fallback to default model - will be registered in dynamic registry later
-                model = "deepseek/deepseek-chat-v3-0324:free"
-                workflow.logger.info(f"No session state found, using default model: {model}")
+                # New session - use the initial model
+                model = initial_model
+                workflow.logger.info(f"New session - using model: {model}")
             
             # Step 0.7: Initialize or update session tool state
             session_state_init = await workflow.execute_activity(
@@ -424,6 +432,7 @@ class SimpleChatWorkflow:
             }
             
             self.session_metadata_updates = {
+                "model": model,  # Add the current model to metadata
                 "statistics": {
                     "total_tokens_input": ai_response.get("usage", {}).get("prompt_tokens", 0),
                     "total_tokens_output": ai_response.get("usage", {}).get("completion_tokens", 0),

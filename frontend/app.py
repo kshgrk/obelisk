@@ -208,7 +208,21 @@ async def create_session(request: Request):
         body = await request.json()
         async with httpx.AsyncClient() as client:
             response = await client.post(f"{BACKEND_URL}/sessions", json=body)
-            return response.json()
+            
+            # Check if response is successful
+            if response.status_code == 200:
+                try:
+                    response_data = response.json()
+                    print(f"Session created successfully: {response_data}")
+                    return response_data
+                except Exception as json_error:
+                    print(f"Error parsing session response JSON: {json_error}")
+                    print(f"Response content: {response.text}")
+                    return JSONResponse({"error": "Invalid response from backend"}, status_code=500)
+            else:
+                print(f"Backend returned error {response.status_code}: {response.text}")
+                return JSONResponse({"error": f"Backend error: {response.status_code}"}, status_code=response.status_code)
+                
     except Exception as e:
         print(f"Error creating session: {e}")
         return JSONResponse({"error": "Failed to create session"}, status_code=500)
@@ -224,6 +238,7 @@ async def send_message(request: Request):
         message_content = body.get("message", "")
         session_id = body.get("session_id")
         stream = body.get("stream", False)
+        config_override = body.get("config_override")  # Extract config_override
         
         if not session_id:
             return JSONResponse({"error": "session_id is required"}, status_code=400)
@@ -237,6 +252,10 @@ async def send_message(request: Request):
             "message": message_content,
             "stream": stream
         }
+        
+        # Add config_override if provided
+        if config_override:
+            chat_request["config_override"] = config_override
         
         # Add timeout to prevent hanging
         timeout = httpx.Timeout(60.0)  # Increased to 60s for chat workflows
@@ -292,12 +311,26 @@ async def send_message(request: Request):
             
             print(f"Processed response content: {response_content[:100]}...")
             
+            # Get the actual model used from config_override or check backend response
+            actual_model = "unknown"
+            if config_override and config_override.get("model"):
+                actual_model = config_override["model"]
+            else:
+                # Try to get from backend response if available
+                try:
+                    backend_result = response.json()
+                    actual_model = backend_result.get("model", "unknown")
+                except:
+                    actual_model = "unknown"
+            
+            print(f"Using model in response: {actual_model}")
+            
             # Return in OpenRouter-compatible format for frontend consistency
             return {
                 "id": f"chatcmpl-{session_id[-8:]}",
                 "object": "chat.completion",
                 "created": int(datetime.now().timestamp()),
-                "model": "deepseek/deepseek-chat-v3-0324:free",
+                "model": actual_model,  # Use actual model instead of hardcoded
                 "choices": [{
                     "index": 0,
                     "message": {
