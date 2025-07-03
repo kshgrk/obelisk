@@ -103,7 +103,8 @@ class DatabaseManager:
                             "temperature": 0.7,
                             "max_tokens": 1000,
                             "streaming": True,
-                            "show_tool_calls": True
+                            "show_tool_calls": True,
+                            "tools_enabled": True
                         },
                         "statistics": {
                             "total_tokens_input": 0,
@@ -112,11 +113,27 @@ class DatabaseManager:
                             "average_response_time_ms": 0.0,
                             "total_response_time_ms": 0.0
                         },
+                        "tool_statistics": {
+                            "total_tool_calls": 0,
+                            "successful_tool_calls": 0,
+                            "failed_tool_calls": 0,
+                            "cancelled_tool_calls": 0,
+                            "total_tool_execution_time_ms": 0.0,
+                            "average_tool_execution_time_ms": 0.0,
+                            "tools_used": {},  # tool_name -> usage_count
+                            "tool_success_rates": {},  # tool_name -> success_rate
+                            "last_tool_call": None,  # timestamp of last tool call
+                            "most_used_tool": None,
+                            "fastest_tool": None,  # tool_name with fastest avg execution
+                            "slowest_tool": None   # tool_name with slowest avg execution
+                        },
                         "metadata": {
                             "total_messages": 0,
                             "total_turns": 0,
                             "features_used": ["chat"],
-                            "last_updated": datetime.utcnow().isoformat()
+                            "last_updated": datetime.utcnow().isoformat(),
+                            "supports_tool_calls": True,
+                            "tool_calls_enabled": True
                         }
                     }
                     
@@ -434,6 +451,186 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"Failed to get session context: {e}")
+            raise
+
+    async def update_tool_statistics(self, session_id: str, tool_name: str, execution_time: float, success: bool, cancelled: bool = False) -> None:
+        """Update tool usage statistics for a session"""
+        try:
+            async with self.get_connection() as db:
+                await db.execute("BEGIN")
+                try:
+                    # Get current session data
+                    cursor = await db.execute(
+                        "SELECT session_data FROM sessions WHERE session_id = ?",
+                        (session_id,)
+                    )
+                    row = await cursor.fetchone()
+                    
+                    if not row:
+                        raise ValueError(f"Session {session_id} not found")
+                    
+                    session_data = json.loads(row['session_data']) if row['session_data'] else {}
+                    
+                    # Ensure tool_statistics exists
+                    if 'tool_statistics' not in session_data:
+                        session_data['tool_statistics'] = {
+                            "total_tool_calls": 0,
+                            "successful_tool_calls": 0,
+                            "failed_tool_calls": 0,
+                            "cancelled_tool_calls": 0,
+                            "total_tool_execution_time_ms": 0.0,
+                            "average_tool_execution_time_ms": 0.0,
+                            "tools_used": {},
+                            "tool_success_rates": {},
+                            "last_tool_call": None,
+                            "most_used_tool": None,
+                            "fastest_tool": None,
+                            "slowest_tool": None
+                        }
+                    
+                    stats = session_data['tool_statistics']
+                    
+                    # Update counters
+                    stats['total_tool_calls'] += 1
+                    if cancelled:
+                        stats['cancelled_tool_calls'] += 1
+                    elif success:
+                        stats['successful_tool_calls'] += 1
+                    else:
+                        stats['failed_tool_calls'] += 1
+                    
+                    # Update execution time statistics
+                    execution_time_ms = execution_time * 1000
+                    stats['total_tool_execution_time_ms'] += execution_time_ms
+                    stats['average_tool_execution_time_ms'] = (
+                        stats['total_tool_execution_time_ms'] / stats['total_tool_calls']
+                    )
+                    
+                    # Update tool-specific statistics
+                    if tool_name not in stats['tools_used']:
+                        stats['tools_used'][tool_name] = 0
+                        stats['tool_success_rates'][tool_name] = {"total": 0, "successful": 0, "rate": 0.0}
+                    
+                    stats['tools_used'][tool_name] += 1
+                    stats['tool_success_rates'][tool_name]["total"] += 1
+                    if success and not cancelled:
+                        stats['tool_success_rates'][tool_name]["successful"] += 1
+                    
+                    # Calculate success rate
+                    tool_stats = stats['tool_success_rates'][tool_name]
+                    tool_stats["rate"] = tool_stats["successful"] / tool_stats["total"] if tool_stats["total"] > 0 else 0.0
+                    
+                    # Update most used tool
+                    most_used_count = 0
+                    for t_name, count in stats['tools_used'].items():
+                        if count > most_used_count:
+                            most_used_count = count
+                            stats['most_used_tool'] = t_name
+                    
+                    # Update timestamp
+                    stats['last_tool_call'] = datetime.utcnow().isoformat()
+                    
+                    # Update metadata
+                    session_data['metadata']['last_updated'] = datetime.utcnow().isoformat()
+                    
+                    # Save updated session data
+                    await db.execute(
+                        "UPDATE sessions SET session_data = ?, updated_at = ? WHERE session_id = ?",
+                        (
+                            json.dumps(session_data, sort_keys=False),
+                            datetime.utcnow().isoformat(),
+                            session_id
+                        )
+                    )
+                    
+                    await db.commit()
+                    logger.info(f"Updated tool statistics for session {session_id}: {tool_name} ({'success' if success else 'failed' if not cancelled else 'cancelled'})")
+                    
+                except Exception:
+                    await db.rollback()
+                    raise
+                    
+        except Exception as e:
+            logger.error(f"Failed to update tool statistics: {e}")
+            raise
+
+    async def get_tool_statistics(self, session_id: str) -> Dict[str, Any]:
+        """Get tool usage statistics for a session"""
+        try:
+            async with self.get_connection() as db:
+                cursor = await db.execute(
+                    "SELECT session_data FROM sessions WHERE session_id = ?",
+                    (session_id,)
+                )
+                row = await cursor.fetchone()
+                
+                if not row:
+                    return {}
+                
+                session_data = json.loads(row['session_data']) if row['session_data'] else {}
+                return session_data.get('tool_statistics', {})
+                
+        except Exception as e:
+            logger.error(f"Failed to get tool statistics: {e}")
+            raise
+
+    async def get_global_tool_statistics(self) -> Dict[str, Any]:
+        """Get aggregated tool statistics across all sessions"""
+        try:
+            async with self.get_connection() as db:
+                cursor = await db.execute("SELECT session_data FROM sessions WHERE session_data != '{}'")
+                
+                global_stats = {
+                    "total_sessions_with_tools": 0,
+                    "total_tool_calls": 0,
+                    "successful_tool_calls": 0,
+                    "failed_tool_calls": 0,
+                    "cancelled_tool_calls": 0,
+                    "tools_used": {},
+                    "tool_success_rates": {},
+                    "average_execution_time_ms": 0.0
+                }
+                
+                total_execution_time = 0.0
+                
+                async for row in cursor:
+                    session_data = json.loads(row['session_data']) if row['session_data'] else {}
+                    tool_stats = session_data.get('tool_statistics', {})
+                    
+                    if tool_stats.get('total_tool_calls', 0) > 0:
+                        global_stats['total_sessions_with_tools'] += 1
+                        global_stats['total_tool_calls'] += tool_stats.get('total_tool_calls', 0)
+                        global_stats['successful_tool_calls'] += tool_stats.get('successful_tool_calls', 0)
+                        global_stats['failed_tool_calls'] += tool_stats.get('failed_tool_calls', 0)
+                        global_stats['cancelled_tool_calls'] += tool_stats.get('cancelled_tool_calls', 0)
+                        
+                        total_execution_time += tool_stats.get('total_tool_execution_time_ms', 0.0)
+                        
+                        # Aggregate tool usage
+                        for tool_name, count in tool_stats.get('tools_used', {}).items():
+                            if tool_name not in global_stats['tools_used']:
+                                global_stats['tools_used'][tool_name] = 0
+                                global_stats['tool_success_rates'][tool_name] = {"total": 0, "successful": 0, "rate": 0.0}
+                            
+                            global_stats['tools_used'][tool_name] += count
+                            
+                            # Aggregate success rates
+                            tool_success_data = tool_stats.get('tool_success_rates', {}).get(tool_name, {})
+                            global_stats['tool_success_rates'][tool_name]["total"] += tool_success_data.get('total', 0)
+                            global_stats['tool_success_rates'][tool_name]["successful"] += tool_success_data.get('successful', 0)
+                
+                # Calculate global success rates
+                for tool_name, data in global_stats['tool_success_rates'].items():
+                    data["rate"] = data["successful"] / data["total"] if data["total"] > 0 else 0.0
+                
+                # Calculate global average execution time
+                if global_stats['total_tool_calls'] > 0:
+                    global_stats['average_execution_time_ms'] = total_execution_time / global_stats['total_tool_calls']
+                
+                return global_stats
+                
+        except Exception as e:
+            logger.error(f"Failed to get global tool statistics: {e}")
             raise
 
     async def save_models(self, models: List[dict]):
