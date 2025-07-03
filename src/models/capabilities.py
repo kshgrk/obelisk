@@ -162,9 +162,9 @@ class ModelCapabilityManager:
                         model_id=row['id'],
                         name=row['name'],
                         supports_tool_calls=bool(row['is_tool_call']),
-                        context_length=row.get('context_length', 0),
-                        created_at=datetime.fromisoformat(row['created_at']) if row.get('created_at') else None,
-                        updated_at=datetime.fromisoformat(row['updated_at']) if row.get('updated_at') else None
+                        context_length=row['context_length'] if row['context_length'] is not None else 0,
+                        created_at=datetime.fromisoformat(row['created_at']) if row['created_at'] else None,
+                        updated_at=datetime.fromisoformat(row['updated_at']) if row['updated_at'] else None
                     )
                 else:
                     return None
