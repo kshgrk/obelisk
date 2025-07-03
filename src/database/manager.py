@@ -12,6 +12,11 @@ from collections import OrderedDict
 
 from src.config.settings import settings
 from src.models.chat import ChatSession, ChatMessage, ChatSessionCreate, ChatMessageCreate, MessageRole, SessionStatus
+from src.models.session_state import (
+    SessionToolStateData, SessionConfiguration, ModelCapabilityInfo, 
+    ToolAvailabilityInfo, ModelCapabilityLevel, SessionToolState,
+    session_state_manager
+)
 
 logger = logging.getLogger(__name__)
 
@@ -693,6 +698,214 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to get models: {e}")
             raise
+
+    async def update_session_tool_state(self, session_id: str, tool_state: SessionToolStateData) -> bool:
+        """Update session tool state in database"""
+        try:
+            async with self.get_connection() as db:
+                # Get current session data
+                cursor = await db.execute(
+                    "SELECT session_data FROM sessions WHERE session_id = ?",
+                    (session_id,)
+                )
+                row = await cursor.fetchone()
+                
+                if not row:
+                    logger.warning(f"Session {session_id} not found for tool state update")
+                    return False
+                
+                session_data = json.loads(row['session_data']) if row['session_data'] else {}
+                
+                # Update session state section
+                session_data['session_state'] = {
+                    "current_model": tool_state.current_model,
+                    "model_capability_level": tool_state.model_info.capability_level.value,
+                    "supports_tool_calls": tool_state.model_info.supports_tool_calls,
+                    "available_tools": tool_state.get_available_tools(),
+                    "session_configuration": {
+                        "enable_tools": tool_state.session_config.enable_tools,
+                        "max_concurrent_tools": tool_state.session_config.max_concurrent_tools,
+                        "tool_timeout_seconds": tool_state.session_config.tool_timeout_seconds,
+                        "cache_duration_minutes": tool_state.session_config.cache_duration_minutes,
+                        "allowed_tools": list(tool_state.session_config.allowed_tools) if tool_state.session_config.allowed_tools else None,
+                        "blocked_tools": list(tool_state.session_config.blocked_tools)
+                    },
+                    "model_switch_count": tool_state.model_switch_count,
+                    "last_model_change": tool_state.last_model_change.isoformat() if tool_state.last_model_change else None,
+                    "cache_statistics": {
+                        "cache_hits": tool_state.cache_hits,
+                        "cache_misses": tool_state.cache_misses,
+                        "cache_refresh_count": tool_state.cache_refresh_count
+                    },
+                    "tool_availability": {
+                        tool_name: {
+                            "state": info.state.value,
+                            "last_checked": info.last_checked.isoformat(),
+                            "cache_expiry": info.cache_expiry.isoformat() if info.cache_expiry else None,
+                            "error_message": info.error_message,
+                            "execution_count": info.execution_count,
+                            "success_count": info.success_count,
+                            "average_execution_time_ms": info.average_execution_time_ms,
+                            "last_execution_time": info.last_execution_time.isoformat() if info.last_execution_time else None
+                        }
+                        for tool_name, info in tool_state.tool_availability.items()
+                    }
+                }
+                
+                # Update database
+                await db.execute(
+                    "UPDATE sessions SET session_data = ?, updated_at = ? WHERE session_id = ?",
+                    (json.dumps(session_data), datetime.utcnow().isoformat(), session_id)
+                )
+                await db.commit()
+                
+                logger.debug(f"Updated session tool state for {session_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Failed to update session tool state: {e}")
+            return False
+
+    async def load_session_tool_state(self, session_id: str) -> Optional[SessionToolStateData]:
+        """Load session tool state from database"""
+        try:
+            async with self.get_connection() as db:
+                cursor = await db.execute(
+                    "SELECT session_data FROM sessions WHERE session_id = ?",
+                    (session_id,)
+                )
+                row = await cursor.fetchone()
+                
+                if not row:
+                    return None
+                
+                session_data = json.loads(row['session_data']) if row['session_data'] else {}
+                state_data = session_data.get('session_state', {})
+                
+                if not state_data.get('current_model'):
+                    return None
+                
+                # Reconstruct model capability info
+                model_info = ModelCapabilityInfo(
+                    model_id=state_data['current_model'],
+                    supports_tool_calls=state_data.get('supports_tool_calls', False),
+                    capability_level=ModelCapabilityLevel(state_data.get('model_capability_level', 'none'))
+                )
+                
+                # Reconstruct session configuration
+                config_data = state_data.get('session_configuration', {})
+                session_config = SessionConfiguration(
+                    session_id=session_id,
+                    enable_tools=config_data.get('enable_tools', True),
+                    max_concurrent_tools=config_data.get('max_concurrent_tools', 3),
+                    tool_timeout_seconds=config_data.get('tool_timeout_seconds', 30.0),
+                    cache_duration_minutes=config_data.get('cache_duration_minutes', 30),
+                    allowed_tools=set(config_data['allowed_tools']) if config_data.get('allowed_tools') else None,
+                    blocked_tools=set(config_data.get('blocked_tools', []))
+                )
+                
+                # Reconstruct tool availability info
+                tool_availability = {}
+                for tool_name, tool_data in state_data.get('tool_availability', {}).items():
+                    tool_availability[tool_name] = ToolAvailabilityInfo(
+                        tool_name=tool_name,
+                        state=SessionToolState(tool_data['state']),
+                        last_checked=datetime.fromisoformat(tool_data['last_checked']),
+                        cache_expiry=datetime.fromisoformat(tool_data['cache_expiry']) if tool_data.get('cache_expiry') else None,
+                        error_message=tool_data.get('error_message'),
+                        execution_count=tool_data.get('execution_count', 0),
+                        success_count=tool_data.get('success_count', 0),
+                        average_execution_time_ms=tool_data.get('average_execution_time_ms', 0.0),
+                        last_execution_time=datetime.fromisoformat(tool_data['last_execution_time']) if tool_data.get('last_execution_time') else None
+                    )
+                
+                # Create session tool state
+                cache_stats = state_data.get('cache_statistics', {})
+                tool_state = SessionToolStateData(
+                    session_id=session_id,
+                    current_model=state_data['current_model'],
+                    model_info=model_info,
+                    tool_availability=tool_availability,
+                    session_config=session_config,
+                    last_model_change=datetime.fromisoformat(state_data['last_model_change']) if state_data.get('last_model_change') else None,
+                    model_switch_count=state_data.get('model_switch_count', 0),
+                    cache_refresh_count=cache_stats.get('cache_refresh_count', 0),
+                    cache_hits=cache_stats.get('cache_hits', 0),
+                    cache_misses=cache_stats.get('cache_misses', 0)
+                )
+                
+                logger.debug(f"Loaded session tool state for {session_id}")
+                return tool_state
+                
+        except Exception as e:
+            logger.error(f"Failed to load session tool state: {e}")
+            return None
+
+    async def initialize_session_tool_state(self, session_id: str, model_id: str, model_info: ModelCapabilityInfo) -> Optional[SessionToolStateData]:
+        """Initialize or load session tool state"""
+        try:
+            # Try to load existing state first
+            existing_state = await self.load_session_tool_state(session_id)
+            if existing_state:
+                # Check if model changed
+                if existing_state.current_model != model_id:
+                    logger.info(f"Model changed for session {session_id}: {existing_state.current_model} → {model_id}")
+                    # Update model in session state manager
+                    updated_state = await session_state_manager.update_model_for_session(
+                        session_id, model_id, model_info
+                    )
+                    if updated_state:
+                        await self.update_session_tool_state(session_id, updated_state)
+                        return updated_state
+                else:
+                    # Load into session state manager
+                    await session_state_manager.create_session_state(
+                        session_id, model_id, model_info, existing_state.session_config
+                    )
+                    return existing_state
+            
+            # Create new session state
+            new_state = await session_state_manager.create_session_state(
+                session_id, model_id, model_info
+            )
+            await self.update_session_tool_state(session_id, new_state)
+            
+            logger.info(f"Initialized session tool state for {session_id} with model {model_id}")
+            return new_state
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize session tool state: {e}")
+            return None
+
+    async def get_session_tool_configuration(self, session_id: str) -> Optional[SessionConfiguration]:
+        """Get session tool configuration"""
+        try:
+            tool_state = await self.load_session_tool_state(session_id)
+            return tool_state.session_config if tool_state else None
+        except Exception as e:
+            logger.error(f"Failed to get session tool configuration: {e}")
+            return None
+
+    async def update_session_tool_configuration(self, session_id: str, config: SessionConfiguration) -> bool:
+        """Update session tool configuration"""
+        try:
+            # Update in session state manager
+            success = await session_state_manager.update_session_configuration(session_id, config)
+            if not success:
+                return False
+            
+            # Get updated state and save to database
+            updated_state = await session_state_manager.get_session_state(session_id)
+            if updated_state:
+                await self.update_session_tool_state(session_id, updated_state)
+                logger.info(f"Updated session tool configuration for {session_id}")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Failed to update session tool configuration: {e}")
+            return False
 
 # Global instance
 db_manager = DatabaseManager() 

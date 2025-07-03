@@ -188,6 +188,164 @@ class DatabaseActivities:
             activity.logger.error(f"Failed to get session context: {e}")
             raise
 
+    @staticmethod
+    @activity.defn
+    async def update_tool_statistics_for_session(session_id: str, tool_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Update tool usage statistics for a session based on tool execution results"""
+        try:
+            activity.logger.info(f"Updating tool statistics for session {session_id} with {len(tool_results)} tool results")
+            
+            statistics_summary = {
+                "total_updated": 0,
+                "successful_tools": 0,
+                "failed_tools": 0,
+                "cancelled_tools": 0,
+                "tools_processed": []
+            }
+            
+            for tool_result in tool_results:
+                try:
+                    tool_name = tool_result.get("tool_name", "unknown")
+                    execution_time = tool_result.get("execution_time_seconds", 0.0)
+                    success = tool_result.get("success", False)
+                    status = tool_result.get("status", "unknown")
+                    cancelled = status in ["cancelled", "timeout"]
+                    
+                    # Update individual tool statistics
+                    await db_manager.update_tool_statistics(
+                        session_id=session_id,
+                        tool_name=tool_name,
+                        execution_time=execution_time,
+                        success=success,
+                        cancelled=cancelled
+                    )
+                    
+                    statistics_summary["total_updated"] += 1
+                    statistics_summary["tools_processed"].append({
+                        "tool_name": tool_name,
+                        "success": success,
+                        "execution_time": execution_time,
+                        "status": status
+                    })
+                    
+                    if cancelled:
+                        statistics_summary["cancelled_tools"] += 1
+                    elif success:
+                        statistics_summary["successful_tools"] += 1
+                    else:
+                        statistics_summary["failed_tools"] += 1
+                        
+                except Exception as e:
+                    activity.logger.warning(f"Failed to update statistics for tool {tool_result.get('tool_name', 'unknown')}: {e}")
+                    continue
+            
+            activity.logger.info(f"Tool statistics update completed for session {session_id}: {statistics_summary['total_updated']} tools processed")
+            return {
+                "success": True,
+                "session_id": session_id,
+                "statistics_summary": statistics_summary,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+        except Exception as e:
+            activity.logger.error(f"Failed to update tool statistics for session {session_id}: {e}")
+            return {
+                "success": False,
+                "session_id": session_id,
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+    @staticmethod
+    @activity.defn
+    async def get_session_tool_statistics(session_id: str) -> Dict[str, Any]:
+        """Get tool usage statistics for a specific session"""
+        try:
+            statistics = await db_manager.get_tool_statistics(session_id)
+            
+            activity.logger.debug(f"Retrieved tool statistics for session {session_id}")
+            return {
+                "success": True,
+                "session_id": session_id,
+                "statistics": statistics,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+        except Exception as e:
+            activity.logger.error(f"Failed to get tool statistics for session {session_id}: {e}")
+            return {
+                "success": False,
+                "session_id": session_id,
+                "error": str(e),
+                "statistics": {},
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+    @staticmethod
+    @activity.defn
+    async def get_global_tool_analytics() -> Dict[str, Any]:
+        """Get aggregated tool usage analytics across all sessions"""
+        try:
+            analytics = await db_manager.get_global_tool_statistics()
+            
+            activity.logger.debug("Retrieved global tool analytics")
+            return {
+                "success": True,
+                "analytics": analytics,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+        except Exception as e:
+            activity.logger.error(f"Failed to get global tool analytics: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "analytics": {},
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+    @staticmethod
+    @activity.defn
+    async def save_conversation_turn_with_tool_analytics(session_id: str, turn_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Save conversation turn and automatically update tool statistics if tool calls are present"""
+        try:
+            # First save the conversation turn
+            saved_turn = await DatabaseActivities.save_conversation_turn(session_id, turn_data)
+            
+            # Extract tool calls from assistant responses for statistics
+            tool_results = []
+            for assistant_response in turn_data.get("assistant_responses", []):
+                tool_calls = assistant_response.get("tool_calls", [])
+                for tool_call in tool_calls:
+                    # Convert tool call format to tool result format for statistics
+                    tool_result = {
+                        "tool_name": tool_call.get("tool_name", "unknown"),
+                        "success": tool_call.get("success", False),
+                        "status": tool_call.get("status", "unknown"),
+                        "execution_time_seconds": tool_call.get("execution_time_ms", 0) / 1000.0,
+                        "call_id": tool_call.get("tool_call_id"),
+                        "timestamp": tool_call.get("timestamp")
+                    }
+                    tool_results.append(tool_result)
+            
+            # Update tool statistics if there are tool calls
+            statistics_update = {"success": True, "statistics_summary": {"total_updated": 0}}
+            if tool_results:
+                statistics_update = await DatabaseActivities.update_tool_statistics_for_session(session_id, tool_results)
+            
+            activity.logger.info(f"Saved conversation turn {turn_data['turn_id']} with tool analytics for session {session_id}")
+            return {
+                "success": True,
+                "saved_turn": saved_turn,
+                "tool_statistics_update": statistics_update,
+                "tool_calls_processed": len(tool_results),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+        except Exception as e:
+            activity.logger.error(f"Failed to save conversation turn with tool analytics: {e}")
+            raise
+
 
 def build_conversation_turn(user_message: str, assistant_response: str, 
                           tool_calls: Optional[List[Dict[str, Any]]] = None,
@@ -247,6 +405,90 @@ def build_tool_call(tool_name: str, arguments: Dict[str, Any],
         "status": status,
         "execution_time_ms": execution_time_ms,
         "timestamp": datetime.utcnow().isoformat()
+    }
+
+
+def build_enhanced_tool_call(tool_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Helper function to build an enhanced tool call entry from tool execution result"""
+    
+    return {
+        "tool_call_id": tool_result.get("call_id", f"call_{str(uuid4())[:8]}"),
+        "tool_name": tool_result.get("tool_name", "unknown"),
+        "arguments": tool_result.get("arguments", {}),
+        "result": tool_result.get("result"),
+        "error": tool_result.get("error"),
+        "status": tool_result.get("status", "unknown"),
+        "success": tool_result.get("success", False),
+        "execution_time_ms": tool_result.get("execution_time_ms", 0),
+        "timestamp": tool_result.get("timestamp", datetime.utcnow().isoformat()),
+        "metadata": tool_result.get("metadata", {})
+    }
+
+
+def build_conversation_turn_with_tools(user_message: str, assistant_response: str, 
+                                     tool_results: Optional[List[Dict[str, Any]]] = None,
+                                     mcp_calls: Optional[List[Dict[str, Any]]] = None,
+                                     metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Enhanced helper function to build a complete conversation turn with tool calling support"""
+    
+    turn_id = f"turn_{str(uuid4())[:8]}"
+    timestamp = datetime.utcnow().isoformat()
+    
+    # Build user message
+    user_msg_id = f"msg_u_{str(uuid4())[:8]}"
+    user_message_data = {
+        "message_id": user_msg_id,
+        "content": user_message,
+        "timestamp": timestamp,
+        "metadata": metadata.get("user_metadata", {}) if metadata else {}
+    }
+    
+    # Build assistant response with enhanced tool call support
+    resp_id = f"resp_{str(uuid4())[:8]}"
+    assistant_msg_id = f"msg_a_{str(uuid4())[:8]}"
+    
+    # Process tool calls from tool results
+    formatted_tool_calls = []
+    if tool_results:
+        for tool_result in tool_results:
+            formatted_tool_call = build_enhanced_tool_call(tool_result)
+            formatted_tool_calls.append(formatted_tool_call)
+    
+    # Calculate tool execution summary
+    tool_execution_summary = {
+        "total_tool_calls": len(formatted_tool_calls),
+        "successful_tool_calls": len([tc for tc in formatted_tool_calls if tc.get("success", False)]),
+        "failed_tool_calls": len([tc for tc in formatted_tool_calls if not tc.get("success", False)]),
+        "total_execution_time_ms": sum(tc.get("execution_time_ms", 0) for tc in formatted_tool_calls),
+        "tools_used": list(set(tc.get("tool_name", "unknown") for tc in formatted_tool_calls))
+    }
+    
+    assistant_response_data = {
+        "response_id": resp_id,
+        "message_id": assistant_msg_id,
+        "content": assistant_response,
+        "timestamp": timestamp,
+        "is_active": True,
+        "tool_calls": formatted_tool_calls,
+        "mcp_calls": mcp_calls or [],
+        "final_content": assistant_response,
+        "metadata": {
+            "generation_type": "tool_enhanced" if formatted_tool_calls else "original",
+            "tool_execution_summary": tool_execution_summary,
+            **(metadata.get("assistant_metadata", {}) if metadata else {})
+        }
+    }
+    
+    return {
+        "turn_id": turn_id,
+        "turn_number": 1,  # Will be set when saved
+        "user_message": user_message_data,
+        "assistant_responses": [assistant_response_data],
+        "metadata": {
+            "has_tool_calls": len(formatted_tool_calls) > 0,
+            "tool_execution_summary": tool_execution_summary,
+            **(metadata.get("turn_metadata", {}) if metadata else {})
+        }
     }
 
 

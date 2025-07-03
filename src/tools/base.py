@@ -54,17 +54,17 @@ class ToolMetrics:
         if len(self.recent_executions) > 10:
             self.recent_executions.pop(0)
         
-        # Track status
-        if result.status == ToolCallStatus.COMPLETED:
+        # Track status (status is already a string due to use_enum_values=True)
+        if result.status == "completed":
             self.successful_calls += 1
-        elif result.status == ToolCallStatus.FAILED:
+        elif result.status == "failed":
             self.failed_calls += 1
             if result.error:
                 error_type = result.error.get('type', 'Unknown')
                 self.error_counts[error_type] += 1
-        elif result.status == ToolCallStatus.TIMEOUT:
+        elif result.status == "timeout":
             self.timeout_calls += 1
-        elif result.status == ToolCallStatus.CANCELLED:
+        elif result.status == "cancelled":
             self.cancelled_calls += 1
     
     def get_success_rate(self) -> float:

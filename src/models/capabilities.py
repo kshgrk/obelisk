@@ -4,13 +4,12 @@ Model capability detection and management for tool calling support
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, Set
+from typing import Optional, List, Dict, Any, Set, TYPE_CHECKING
 from dataclasses import dataclass
 import aiohttp
 import json
 
 from src.config.settings import settings
-from src.database.manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +34,19 @@ class ModelCapability:
 class ModelCapabilityManager:
     """Manages model capabilities and tool calling support detection"""
     
-    def __init__(self, db_manager: Optional[DatabaseManager] = None):
-        self.db_manager = db_manager or DatabaseManager()
+    def __init__(self, db_manager: Optional[Any] = None):
+        self._db_manager = db_manager
         self._capability_cache: Dict[str, ModelCapability] = {}
         self._cache_ttl = timedelta(hours=24)  # Cache for 24 hours
         self._last_cache_update: Optional[datetime] = None
+    
+    @property
+    def db_manager(self):
+        """Lazy-loaded database manager to avoid circular imports"""
+        if self._db_manager is None:
+            from src.database.manager import db_manager
+            self._db_manager = db_manager
+        return self._db_manager
         
     async def initialize(self):
         """Initialize the capability manager and load cached capabilities"""

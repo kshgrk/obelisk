@@ -1,7 +1,7 @@
 """
 Tool parameter schemas using Pydantic for validation and serialization
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Union, Literal
 from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, field_validator
@@ -81,19 +81,98 @@ class ToolParameter(BaseModel):
         return schema
 
 
+class PermissionLevel(str, Enum):
+    """Permission levels for tool access control"""
+    ADMIN = "admin"
+    USER = "user"
+    GUEST = "guest"
+    RESTRICTED = "restricted"
+
+
+class ToolPermission(BaseModel):
+    """Tool permission configuration"""
+    level: PermissionLevel = Field(..., description="Required permission level")
+    allowed_roles: List[str] = Field(default_factory=list, description="Specific roles allowed to use tool")
+    denied_roles: List[str] = Field(default_factory=list, description="Specific roles denied access to tool")
+    allowed_models: List[str] = Field(default_factory=list, description="Models allowed to use this tool")
+    max_calls_per_hour: Optional[int] = Field(default=None, description="Rate limit per hour")
+    max_calls_per_session: Optional[int] = Field(default=None, description="Rate limit per session")
+    
+    model_config = {"use_enum_values": True, "protected_namespaces": ()}
+
+
+class ToolVersion(BaseModel):
+    """Tool version information"""
+    version: str = Field(..., description="Semantic version string")
+    release_date: datetime = Field(default_factory=datetime.utcnow, description="Version release date")
+    changelog: str = Field(default="", description="Changes in this version")
+    deprecated: bool = Field(default=False, description="Whether this version is deprecated")
+    min_compatibility_version: Optional[str] = Field(default=None, description="Minimum compatible version")
+    
+    @field_validator('version')
+    def validate_version(cls, v):
+        """Validate semantic version format"""
+        import re
+        if not re.match(r'^\d+\.\d+\.\d+(?:-[\w\.-]+)?(?:\+[\w\.-]+)?$', v):
+            raise ValueError("Version must follow semantic versioning format (x.y.z)")
+        return v
+    
+    def is_compatible_with(self, other_version: str) -> bool:
+        """Check if this version is compatible with another version"""
+        if not self.min_compatibility_version:
+            return True
+        
+        # Simple version comparison - could be enhanced with proper semver logic
+        def version_tuple(v: str) -> tuple:
+            return tuple(map(int, v.split('.')[:3]))
+        
+        try:
+            return version_tuple(other_version) >= version_tuple(self.min_compatibility_version)
+        except (ValueError, AttributeError):
+            return False
+
+
+class ToolMetadata(BaseModel):
+    """Enhanced tool metadata for registry management"""
+    tags: List[str] = Field(default_factory=list, description="Tool categorization tags")
+    category: str = Field(default="general", description="Tool category")
+    author: str = Field(default="unknown", description="Tool author")
+    license: str = Field(default="unknown", description="Tool license")
+    repository_url: Optional[str] = Field(default=None, description="Source repository URL")
+    documentation_url: Optional[str] = Field(default=None, description="Documentation URL")
+    dependencies: List[str] = Field(default_factory=list, description="Tool dependencies")
+    model_requirements: Dict[str, Any] = Field(default_factory=dict, description="Model capability requirements")
+    resource_requirements: Dict[str, Any] = Field(default_factory=dict, description="Resource requirements")
+    experimental: bool = Field(default=False, description="Whether tool is experimental")
+    performance_tier: str = Field(default="standard", description="Performance tier (fast, standard, slow)")
+    
+    model_config = {"protected_namespaces": ()}
+
+
 class ToolDefinition(BaseModel):
-    """Schema for tool definition that can be sent to OpenRouter"""
+    """Enhanced tool definition with versioning and metadata"""
     name: str = Field(..., description="Tool name (must be valid identifier)")
     description: str = Field(..., description="Tool description")
     parameters: List[ToolParameter] = Field(default_factory=list, description="Tool parameters")
     version: str = Field(default="1.0.0", description="Tool version")
     timeout_seconds: float = Field(default=30.0, description="Tool execution timeout")
     
+    # Enhanced fields for Task 7
+    version_info: ToolVersion = Field(default_factory=lambda: ToolVersion(version="1.0.0"), description="Detailed version information")
+    permissions: ToolPermission = Field(default_factory=lambda: ToolPermission(level=PermissionLevel.USER), description="Permission requirements")
+    metadata: ToolMetadata = Field(default_factory=ToolMetadata, description="Tool metadata")
+    
     @field_validator('name')
     def validate_name(cls, v):
         """Validate tool name is a valid identifier"""
         if not v.isidentifier():
             raise ValueError("Tool name must be a valid Python identifier")
+        return v
+    
+    @field_validator('version')
+    def validate_version_sync(cls, v, values):
+        """Ensure version matches version_info.version"""
+        # Note: In Pydantic v2, we need to handle this differently
         return v
     
     def get_required_parameters(self) -> List[str]:
@@ -129,6 +208,22 @@ class ToolDefinition(BaseModel):
                 }
             }
         }
+    
+    def is_compatible_with_model(self, model_capabilities: Dict[str, Any]) -> bool:
+        """Check if tool is compatible with model capabilities"""
+        # Check if model supports tool calling
+        if not model_capabilities.get('supports_tool_calls', False):
+            return False
+        
+        # Check specific model requirements
+        if self.metadata.model_requirements:
+            for requirement, value in self.metadata.model_requirements.items():
+                if requirement not in model_capabilities:
+                    return False
+                if model_capabilities[requirement] != value:
+                    return False
+        
+        return True
 
 
 class ToolCallStatus(str, Enum):
@@ -150,8 +245,7 @@ class ToolCall(BaseModel):
     status: ToolCallStatus = Field(default=ToolCallStatus.PENDING, description="Tool call status")
     timeout_seconds: Optional[float] = Field(default=None, description="Override tool timeout")
     
-    class Config:
-        use_enum_values = True
+    model_config = {"use_enum_values": True}
 
 
 class ToolCallResult(BaseModel):
@@ -165,8 +259,7 @@ class ToolCallResult(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="When the result was generated")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     
-    class Config:
-        use_enum_values = True
+    model_config = {"use_enum_values": True}
     
     @field_validator('result', 'error')
     def validate_json_serializable(cls, v):
@@ -183,11 +276,13 @@ class ToolCallResult(BaseModel):
     
     def is_success(self) -> bool:
         """Check if the tool call was successful"""
-        return self.status == ToolCallStatus.COMPLETED and self.error is None
+        # Since use_enum_values=True, self.status is already a string
+        return self.status == "completed" and self.error is None
     
     def is_error(self) -> bool:
         """Check if the tool call resulted in an error"""
-        return self.status in [ToolCallStatus.FAILED, ToolCallStatus.TIMEOUT] or self.error is not None
+        # Since use_enum_values=True, self.status is already a string
+        return self.status in ["failed", "timeout"] or self.error is not None
 
 
 class ToolExecutionContext(BaseModel):
@@ -202,7 +297,7 @@ class ToolExecutionContext(BaseModel):
 
 
 class ToolRegistration(BaseModel):
-    """Schema for tool registration in the registry"""
+    """Enhanced tool registration with versioning and access control"""
     definition: ToolDefinition = Field(..., description="Tool definition")
     implementation_class: str = Field(..., description="Full class path for the tool implementation")
     enabled: bool = Field(default=True, description="Whether the tool is enabled")
@@ -210,5 +305,112 @@ class ToolRegistration(BaseModel):
     last_used: Optional[datetime] = Field(default=None, description="When the tool was last used")
     usage_count: int = Field(default=0, description="Number of times tool has been used")
     
-    class Config:
-        use_enum_values = True 
+    # Enhanced fields for Task 7
+    version_history: List[ToolVersion] = Field(default_factory=list, description="Version history")
+    permission_grants: Dict[str, List[str]] = Field(default_factory=dict, description="Permission grants by session/user")
+    usage_statistics: Dict[str, Any] = Field(default_factory=dict, description="Detailed usage statistics")
+    last_permission_check: Optional[datetime] = Field(default=None, description="Last permission validation")
+    model_compatibility_cache: Dict[str, bool] = Field(default_factory=dict, description="Cached model compatibility results")
+    
+    model_config = {"use_enum_values": True, "protected_namespaces": ()}
+    
+    def add_version(self, version_info: ToolVersion) -> None:
+        """Add a new version to the history"""
+        self.version_history.append(version_info)
+        # Keep only last 10 versions
+        if len(self.version_history) > 10:
+            self.version_history = self.version_history[-10:]
+    
+    def get_latest_version(self) -> Optional[ToolVersion]:
+        """Get the latest version from history"""
+        if self.version_history:
+            return sorted(self.version_history, key=lambda v: v.release_date)[-1]
+        return None
+    
+    def is_version_deprecated(self, version: str) -> bool:
+        """Check if a specific version is deprecated"""
+        for v in self.version_history:
+            if v.version == version:
+                return v.deprecated
+        return False
+    
+    def has_permission(self, session_id: str, user_role: str, model_id: str) -> bool:
+        """Check if session/user has permission to use this tool"""
+        permissions = self.definition.permissions
+        
+        # Check permission level
+        if permissions.level == PermissionLevel.ADMIN and user_role != "admin":
+            return False
+        elif permissions.level == PermissionLevel.RESTRICTED:
+            return False
+        
+        # Check role-based access
+        if permissions.denied_roles and user_role in permissions.denied_roles:
+            return False
+        
+        if permissions.allowed_roles and user_role not in permissions.allowed_roles:
+            return False
+        
+        # Check model restrictions
+        if permissions.allowed_models and model_id not in permissions.allowed_models:
+            return False
+        
+        return True
+    
+    def check_rate_limits(self, session_id: str) -> Dict[str, Any]:
+        """Check if rate limits are exceeded"""
+        now = datetime.utcnow()
+        permissions = self.definition.permissions
+        
+        # Initialize session stats if not exists
+        if session_id not in self.usage_statistics:
+            self.usage_statistics[session_id] = {
+                'hourly_calls': [],
+                'session_calls': 0,
+                'first_call': now.isoformat()
+            }
+        
+        session_stats = self.usage_statistics[session_id]
+        
+        # Check hourly limit
+        hourly_exceeded = False
+        if permissions.max_calls_per_hour:
+            # Filter calls from last hour
+            one_hour_ago = now - timedelta(hours=1)
+            hourly_calls = [
+                call_time for call_time in session_stats.get('hourly_calls', [])
+                if datetime.fromisoformat(call_time) > one_hour_ago
+            ]
+            session_stats['hourly_calls'] = hourly_calls
+            
+            if len(hourly_calls) >= permissions.max_calls_per_hour:
+                hourly_exceeded = True
+        
+        # Check session limit
+        session_exceeded = False
+        if permissions.max_calls_per_session:
+            if session_stats.get('session_calls', 0) >= permissions.max_calls_per_session:
+                session_exceeded = True
+        
+        return {
+            'hourly_exceeded': hourly_exceeded,
+            'session_exceeded': session_exceeded,
+            'calls_remaining_hour': (permissions.max_calls_per_hour or float('inf')) - len(session_stats.get('hourly_calls', [])),
+            'calls_remaining_session': (permissions.max_calls_per_session or float('inf')) - session_stats.get('session_calls', 0)
+        }
+    
+    def record_usage(self, session_id: str) -> None:
+        """Record tool usage for rate limiting"""
+        now = datetime.utcnow()
+        
+        if session_id not in self.usage_statistics:
+            self.usage_statistics[session_id] = {
+                'hourly_calls': [],
+                'session_calls': 0,
+                'first_call': now.isoformat()
+            }
+        
+        session_stats = self.usage_statistics[session_id]
+        session_stats['hourly_calls'].append(now.isoformat())
+        session_stats['session_calls'] += 1
+        session_stats['last_call'] = now.isoformat() 

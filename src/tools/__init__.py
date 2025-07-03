@@ -36,7 +36,12 @@ from .schemas import (
     ToolCallResult,
     ToolCallStatus,
     ToolExecutionContext,
-    ToolRegistration
+    ToolRegistration,
+    # Enhanced Task 7 schemas
+    PermissionLevel,
+    ToolPermission,
+    ToolVersion,
+    ToolMetadata
 )
 
 # Exception classes
@@ -76,6 +81,11 @@ __all__ = [
     'ToolCallStatus',
     'ToolExecutionContext',
     'ToolRegistration',
+    # Enhanced Task 7 schemas
+    'PermissionLevel',
+    'ToolPermission',
+    'ToolVersion',
+    'ToolMetadata',
     
     # Exceptions
     'ToolError',

@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 from src.config.settings import settings
 from src.temporal.client import temporal_client
 from src.temporal.workflows.simple_chat import SimpleChatWorkflow, SimpleStreamingChatWorkflow
+from src.temporal.workflows.dynamic_tools import DynamicToolManagementWorkflow
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -34,6 +35,7 @@ class ChatCompletionRequest(BaseModel):
 class SimpleChatRequest(BaseModel):
     session_id: str
     message: str
+    model_id: Optional[str] = None
     stream: Optional[bool] = True
     config_override: Optional[dict] = None
 
@@ -44,6 +46,31 @@ async def get_temporal_client():
         return client
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to connect to Temporal: {str(e)}")
+
+async def execute_dynamic_tool_activity(activity_name: str, args: list) -> dict:
+    """Execute a dynamic tool activity via workflow"""
+    client = await get_temporal_client()
+    
+    try:
+        # Generate unique workflow ID
+        workflow_id = f"dynamic-tool-{activity_name}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        
+        # Start the workflow
+        workflow_handle = await client.start_workflow(
+            DynamicToolManagementWorkflow.run,
+            args=[activity_name, args],
+            id=workflow_id,
+            task_queue=settings.temporal.task_queue,
+        )
+        
+        # Wait for workflow completion
+        result = await workflow_handle.result()
+        return result
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Dynamic tool activity error: {str(e)}")
+    finally:
+        await temporal_client.disconnect()
 
 async def execute_temporal_workflow(session_id: str, message: str, config_override: Optional[dict] = None, streaming: bool = True) -> str:
     """Execute Temporal workflow for chat"""
@@ -184,6 +211,25 @@ async def simple_chat(request: SimpleChatRequest):
         if not request.message.strip():
             raise HTTPException(status_code=400, detail="Message cannot be empty")
         
+        # Handle model switching if model_id is provided
+        if request.model_id:
+            try:
+                # Switch model for the session before processing the message
+                switch_result = await execute_dynamic_tool_activity(
+                    "switch_session_model_dynamic",
+                    [request.session_id, request.model_id]
+                )
+                
+                if not switch_result.get("success"):
+                    logger.warning(f"Model switch failed for session {request.session_id}: {switch_result.get('error')}")
+                    # Continue with the message even if model switch fails
+                else:
+                    logger.info(f"Model switched for session {request.session_id}: {switch_result.get('old_model')} → {switch_result.get('new_model')}")
+                    
+            except Exception as e:
+                logger.warning(f"Model switch error for session {request.session_id}: {e}")
+                # Continue with the message even if model switch fails
+        
         if request.stream:
             # For streaming: start workflow asynchronously and stream via SSE
             return await start_streaming_workflow(request.session_id, request.message, request.config_override)
@@ -289,4 +335,192 @@ async def start_streaming_workflow(session_id: str, message: str, config_overrid
         )
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to start streaming workflow: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"Failed to start streaming workflow: {str(e)}")
+
+
+# Dynamic Tool Registration Endpoints
+
+class ModelSwitchRequest(BaseModel):
+    session_id: str
+    new_model: str
+
+class ToolValidationRequest(BaseModel):
+    session_id: str
+    tool_name: str
+
+@router.post("/tools/switch-model")
+async def switch_session_model(request: ModelSwitchRequest):
+    """Switch model for a session and update tool availability"""
+    try:
+        # Execute dynamic model switch via workflow
+        result = await execute_dynamic_tool_activity(
+            "switch_session_model_dynamic",
+            [request.session_id, request.new_model]
+        )
+        
+        if result.get("success"):
+            return {
+                "success": True,
+                "session_id": request.session_id,
+                "old_model": result.get("old_model"),
+                "new_model": result.get("new_model"),
+                "tools_added": result.get("tools_added", []),
+                "tools_removed": result.get("tools_removed", []),
+                "message": f"Model switched successfully to {request.new_model}"
+            }
+        else:
+            raise HTTPException(status_code=400, detail=result.get("error", "Model switch failed"))
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to switch model: {str(e)}")
+
+@router.get("/tools/session/{session_id}")
+async def get_session_tools(session_id: str, refresh_cache: bool = False):
+    """Get available tools for a session"""
+    try:
+        result = await execute_dynamic_tool_activity(
+            "get_session_tools",
+            [session_id, refresh_cache]
+        )
+        
+        if result.get("success"):
+            return {
+                "success": True,
+                "session_id": session_id,
+                "available_tools": result.get("available_tools", {}),
+                "tool_count": result.get("tool_count", 0),
+                "cache_refreshed": refresh_cache
+            }
+        else:
+            raise HTTPException(status_code=404, detail=result.get("error", "Session not found"))
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get session tools: {str(e)}")
+
+@router.post("/tools/validate")
+async def validate_tool_call(request: ToolValidationRequest):
+    """Validate if a tool call is available for the session"""
+    try:
+        result = await execute_dynamic_tool_activity(
+            "validate_tool_call_for_session",
+            [request.session_id, request.tool_name]
+        )
+        
+        if result.get("success"):
+            return {
+                "success": True,
+                "session_id": request.session_id,
+                "tool_name": request.tool_name,
+                "is_valid": result.get("is_valid", False),
+                "validation_message": result.get("validation_message", "")
+            }
+        else:
+            raise HTTPException(status_code=400, detail=result.get("error", "Validation failed"))
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to validate tool call: {str(e)}")
+
+@router.get("/tools/compatibility-matrix")
+async def get_tool_compatibility_matrix():
+    """Get compatibility matrix of tools vs models"""
+    try:
+        result = await execute_dynamic_tool_activity(
+            "get_tool_compatibility_matrix",
+            []
+        )
+        
+        if result.get("success"):
+            return {
+                "success": True,
+                "compatibility_matrix": result.get("compatibility_matrix", {}),
+                "model_count": result.get("model_count", 0),
+                "tool_count": result.get("tool_count", 0)
+            }
+        else:
+            raise HTTPException(status_code=500, detail=result.get("error", "Failed to generate matrix"))
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get compatibility matrix: {str(e)}")
+
+@router.get("/tools/session/{session_id}/state")
+async def get_session_tool_state(session_id: str):
+    """Get detailed tool state for a session"""
+    try:
+        result = await execute_dynamic_tool_activity(
+            "get_session_tool_state",
+            [session_id]
+        )
+        
+        if result.get("success"):
+            return {
+                "success": True,
+                "session_id": session_id,
+                "current_model": result.get("current_model"),
+                "available_tools": result.get("available_tools", []),
+                "tool_count": result.get("tool_count", 0),
+                "last_model_change": result.get("last_model_change"),
+                "model_switch_count": result.get("model_switch_count", 0)
+            }
+        else:
+            raise HTTPException(status_code=404, detail=result.get("error", "Session not found"))
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get session tool state: {str(e)}")
+
+@router.get("/tools/model-changes")
+async def get_model_change_history(session_id: Optional[str] = None):
+    """Get model change history, optionally filtered by session"""
+    try:
+        result = await execute_dynamic_tool_activity(
+            "get_model_change_history",
+            [session_id]
+        )
+        
+        if result.get("success"):
+            return {
+                "success": True,
+                "session_filter": session_id,
+                "change_events": result.get("change_events", []),
+                "event_count": result.get("event_count", 0)
+            }
+        else:
+            raise HTTPException(status_code=500, detail=result.get("error", "Failed to get change history"))
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get model change history: {str(e)}")
+
+@router.delete("/tools/session/{session_id}")
+async def cleanup_session_tools(session_id: str):
+    """Clean up session data from dynamic tool registry"""
+    try:
+        result = await execute_dynamic_tool_activity(
+            "cleanup_session_tools",
+            [session_id]
+        )
+        
+        if result.get("success"):
+            return {
+                "success": True,
+                "session_id": session_id,
+                "was_registered": result.get("was_registered", False),
+                "message": "Session tools cleaned up successfully"
+            }
+        else:
+            raise HTTPException(status_code=500, detail=result.get("error", "Cleanup failed"))
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to cleanup session tools: {str(e)}")
