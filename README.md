@@ -162,6 +162,7 @@ class MyCustomTool(BaseTool):
 - [ ] **RAG** for custom uploaded/scraped files
 - [ ] **Context caching** for longer sessions
 - [ ] **Multi-Agent system**
+- [ ] **Dockerise** the whole thing for easier setup
 
 ## Contributing
 
