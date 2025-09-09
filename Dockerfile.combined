@@ -1,0 +1,120 @@
+# Combined Dockerfile for both backend and frontend
+FROM python:3.12-slim
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    nginx \
+    supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash app
+
+# Set work directory
+WORKDIR /app
+
+# Copy dependency files first for better caching
+COPY pyproject.toml ./
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -e .
+
+# Copy application code
+COPY . .
+
+# Copy frontend files
+COPY frontend/ ./frontend/
+
+# Create directory for database and logs
+RUN mkdir -p /app/data /app/logs /var/log/supervisor && \
+    chown -R app:app /app/data /app/logs
+
+# Configure nginx for frontend and backend proxy
+RUN rm /etc/nginx/sites-enabled/default
+COPY <<EOF /etc/nginx/sites-enabled/obelisk
+server {
+    listen 80;
+    server_name localhost;
+
+    # Frontend static files
+    location /static/ {
+        alias /app/frontend/static/;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # Frontend routes (HTML pages)
+    location / {
+        try_files \$uri \$uri/ /index.html;
+        root /app/frontend/templates/;
+        index index.html;
+    }
+
+    # Backend API proxy
+    location /api/ {
+        proxy_pass http://localhost:8001/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # Health check
+    location /health {
+        proxy_pass http://localhost:8001/health;
+    }
+}
+EOF
+
+# Configure supervisor to run both nginx and backend
+COPY <<EOF /etc/supervisor/conf.d/obelisk.conf
+[supervisord]
+nodaemon=true
+user=root
+
+[program:backend]
+command=uvicorn main:app --host 127.0.0.1 --port 8001 --log-level info
+directory=/app
+user=app
+autostart=true
+autorestart=true
+stdout_logfile=/app/logs/backend.log
+stderr_logfile=/app/logs/backend_error.log
+
+[program:nginx]
+command=nginx -g 'daemon off;'
+user=root
+autostart=true
+autorestart=true
+stdout_logfile=/app/logs/nginx.log
+stderr_logfile=/app/logs/nginx_error.log
+
+[program:worker]
+command=python src/temporal/workers/simple_chat_worker.py
+directory=/app
+user=app
+autostart=true
+autorestart=true
+stdout_logfile=/app/logs/worker.log
+stderr_logfile=/app/logs/worker_error.log
+EOF
+
+# Switch to non-root user for backend
+USER app
+
+# Expose port
+EXPOSE 80
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost/health || exit 1
+
+# Start supervisor (which starts both services)
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/obelisk.conf"]

@@ -1,0 +1,20 @@
+services:
+  # Combined Backend + Frontend Application
+  obelisk:
+    build:
+      context: .
+      dockerfile: Dockerfile.simple
+    container_name: obelisk-combined
+    ports:
+      - "127.0.0.1:3000:3000"  # Frontend
+      - "127.0.0.1:8001:8001"  # Backend API
+      - "127.0.0.1:7233:7233"  # Temporal gRPC
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite:///./data/chat_sessions.db
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    restart: unless-stopped

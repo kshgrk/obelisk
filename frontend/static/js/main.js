@@ -3,12 +3,12 @@
 
 // Configuration
 const API_CONFIG = {
-    BASE_URL: 'http://localhost:8001',
-    BACKEND_URL: 'http://localhost:8001',
+    BASE_URL: 'http://localhost:8080',
+    BACKEND_URL: 'http://localhost:8080',
     ENDPOINTS: {
-        SESSIONS: '/sessions',
-        CHAT: '/chat',
-        EVENTS: '/events'
+        SESSIONS: '/api/sessions',
+        CHAT: '/api/chat',
+        EVENTS: '/api/events'
     }
 };
 
@@ -602,10 +602,12 @@ class APIClient {
             requestData.config_override = configOverride;
         }
 
-        return this.request(API_CONFIG.ENDPOINTS.CHAT, {
+        const response = await this.request(API_CONFIG.ENDPOINTS.CHAT, {
             method: 'POST',
             body: JSON.stringify(requestData)
         });
+
+        return response;
     }
 
     async deleteSession(sessionId) {
@@ -1040,7 +1042,7 @@ class ChatManager {
 
             // Send message and handle streaming response
             const response = await apiClient.sendMessage(appState.currentSessionId, message, true);
-            
+
             if (response.body) {
                 await this.handleStreamingResponse(response);
             } else {
@@ -1123,7 +1125,7 @@ class ChatManager {
         try {
             while (true) {
                 const { done, value } = await reader.read();
-                
+
                 if (done) break;
 
                 const chunk = decoder.decode(value);
@@ -1132,7 +1134,7 @@ class ChatManager {
                 for (const line of lines) {
                     if (line.startsWith('data: ')) {
                         const data = line.slice(6);
-                        
+
                         if (data === '[DONE]') {
                             await this.completeStreamingMessage(assistantMessage.id);
                             return;

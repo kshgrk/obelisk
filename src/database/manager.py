@@ -93,9 +93,12 @@ class DatabaseManager:
             if conn:
                 await conn.close()
 
-    async def create_session(self, session_data: ChatSessionCreate) -> ChatSession:
+    async def create_session(self, session_data: ChatSessionCreate, custom_session_id: Optional[str] = None) -> ChatSession:
         """Create a new chat session with optimized structure"""
-        session_id = str(uuid4())
+        if custom_session_id:
+            session_id = custom_session_id
+        else:
+            session_id = str(uuid4())
         
         try:
             async with self.get_connection() as db:

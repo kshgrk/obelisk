@@ -1,0 +1,103 @@
+# version: '3.8'  # Commented out as it's obsolete
+
+services:
+  # Main FastAPI Application
+  obelisk-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: obelisk-backend
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8001
+      - DATABASE_URL=sqlite:///./data/chat_sessions.db
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    depends_on:
+      - temporal
+    networks:
+      - obelisk-network
+    restart: unless-stopped
+
+  # Frontend Application
+  obelisk-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+    container_name: obelisk-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - BACKEND_URL=http://obelisk-backend:8001
+    depends_on:
+      - obelisk-backend
+    networks:
+      - obelisk-network
+    restart: unless-stopped
+
+  # Temporal Worker
+  obelisk-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: obelisk-worker
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite:///./data/chat_sessions.db
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    command: python src/temporal/workers/simple_chat_worker.py
+    depends_on:
+      - temporal
+      - obelisk-backend
+    networks:
+      - obelisk-network
+    restart: unless-stopped
+
+  # Temporal Server (Optional - comment out if not needed)
+  temporal:
+    image: temporalio/auto-setup:1.25.0
+    container_name: obelisk-temporal
+    ports:
+      - "7233:7233"  # gRPC
+      - "8233:8233"  # Web UI (legacy)
+    environment:
+      - DB=sqlite
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+    volumes:
+      - ./temporal-config:/etc/temporal/config/dynamicconfig
+      - temporal-data:/temporal/data
+    networks:
+      - obelisk-network
+    restart: unless-stopped
+
+  # Temporal UI (Optional)
+  temporal-ui:
+    image: temporalio/ui:2.28.0
+    container_name: obelisk-temporal-ui
+    ports:
+      - "8080:8080"
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000,http://localhost:8001
+    depends_on:
+      - temporal
+    networks:
+      - obelisk-network
+    restart: unless-stopped
+
+volumes:
+  temporal-data:
+
+networks:
+  obelisk-network:
+    driver: bridge

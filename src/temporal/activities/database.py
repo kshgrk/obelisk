@@ -24,10 +24,10 @@ class DatabaseActivities:
         """Create a new chat session"""
         try:
             from src.models.chat import ChatSessionCreate
-            
+
             session_data = ChatSessionCreate(name=name)
             session = await db_manager.create_session(session_data)
-            
+
             return {
                 "session_id": session.id,
                 "name": session.name,
@@ -39,6 +39,34 @@ class DatabaseActivities:
         except Exception as e:
             activity.logger.error(f"Failed to create session: {e}")
             raise
+
+    @staticmethod
+    @activity.defn
+    async def create_session_with_id(session_id: str, name: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new chat session with a specific session_id"""
+        try:
+            from src.models.chat import ChatSessionCreate
+
+            # Create session data with the specific session_id
+            session_data = ChatSessionCreate(name=name)
+            # Use the custom session_id parameter
+            session = await db_manager.create_session(session_data, custom_session_id=session_id)
+
+            return {
+                "success": True,
+                "session_id": session.id,
+                "name": session.name,
+                "status": session.status,
+                "created_at": session.created_at.isoformat() if session.created_at else None,
+                "message_count": session.message_count
+            }
+
+        except Exception as e:
+            activity.logger.error(f"Failed to create session with id {session_id}: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
     @staticmethod
     @activity.defn

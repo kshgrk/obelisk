@@ -1,0 +1,38 @@
+services:
+  # Combined Backend + Frontend Application
+  obelisk:
+    build:
+      context: .
+      dockerfile: Dockerfile.combined
+    container_name: obelisk-combined
+    ports:
+      - "80:80"  # Single port for both frontend and backend
+    env_file:
+      - .env
+    environment:
+      - SERVER_HOST=127.0.0.1
+      - SERVER_PORT=8001
+      - DATABASE_URL=sqlite:///./data/chat_sessions.db
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    restart: unless-stopped
+
+  # Optional: Temporal Server (comment out if not needed)
+  temporal:
+    image: temporalio/auto-setup:1.25.0
+    container_name: obelisk-temporal
+    ports:
+      - "7233:7233"  # gRPC
+      - "8080:8080"  # Temporal UI
+    environment:
+      - DB=sqlite
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+    volumes:
+      - ./temporal-config:/etc/temporal/config/dynamicconfig
+      - temporal-data:/temporal/data
+    restart: unless-stopped
+
+volumes:
+  temporal-data:

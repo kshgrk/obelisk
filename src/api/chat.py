@@ -210,7 +210,7 @@ async def simple_chat(request: SimpleChatRequest):
     try:
         if not request.message.strip():
             raise HTTPException(status_code=400, detail="Message cannot be empty")
-        
+
         # Handle model switching if model_id is provided
         if request.model_id:
             try:
@@ -262,13 +262,13 @@ async def start_streaming_workflow(session_id: str, message: str, config_overrid
     try:
         # Import the event system from router
         from .router import active_streams, session_events
-        
+
         # Start the workflow asynchronously (don't wait for completion)
         client = await get_temporal_client()
-        
+
         # Generate unique workflow ID
         workflow_id = f"chat-{session_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8]}"
-        
+
         # Start the streaming workflow asynchronously
         workflow_handle = await client.start_workflow(
             SimpleStreamingChatWorkflow.run,
@@ -276,42 +276,42 @@ async def start_streaming_workflow(session_id: str, message: str, config_overrid
             id=workflow_id,
             task_queue=settings.temporal.task_queue,
         )
-        
+
         # Disconnect from Temporal client (workflow continues running)
         await temporal_client.disconnect()
-        
+
         # Immediately return SSE stream that will receive events
         async def event_stream():
             import time
-            
+
             # Create a queue for this stream
             queue = asyncio.Queue(maxsize=50)
-            
+
             # Register this stream for the session
             active_streams[session_id].append(queue)
-            
+
             try:
                 logger.info(f"Direct SSE stream started for session {session_id[:8]}")
-                
+
                 # Clear old events to prevent mixing with new request
                 session_events[session_id].clear()
-                
+
                 # Stream new events as they arrive (don't send old events)
                 while True:
                     try:
                         # Wait for new event with timeout
                         event = await asyncio.wait_for(queue.get(), timeout=30.0)
                         yield f"data: {json.dumps(event)}\n\n"
-                        
+
                         # If this is a completion event, close the stream
                         if event.get("event") == "RunCompleted":
                             logger.info(f"Direct SSE stream completed for session {session_id[:8]}")
                             break
-                            
+
                     except asyncio.TimeoutError:
                         # Send keepalive
                         yield f"data: {json.dumps({'event': 'keepalive', 'timestamp': int(time.time())})}\n\n"
-                        
+
             except Exception as e:
                 logger.error(f"Error in direct SSE stream for session {session_id[:8]}: {e}")
                 yield f"data: {json.dumps({'event': 'error', 'message': str(e)})}\n\n"
@@ -321,19 +321,19 @@ async def start_streaming_workflow(session_id: str, message: str, config_overrid
                     active_streams[session_id].remove(queue)
                 if not active_streams[session_id]:
                     del active_streams[session_id]
-        
+
         return StreamingResponse(
             event_stream(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
-                "Connection": "keep-alive", 
+                "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Headers": "Cache-Control"
             }
         )
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start streaming workflow: {str(e)}")
 

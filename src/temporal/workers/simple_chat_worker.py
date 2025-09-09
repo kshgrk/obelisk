@@ -7,6 +7,10 @@ import sys
 import os
 from pathlib import Path
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 # Add the project root to Python path for direct execution
 if __name__ == "__main__":
     project_root = Path(__file__).parent.parent.parent.parent
@@ -58,6 +62,7 @@ async def start_optimized_chat_worker():
             activities=[
                 # New optimized database activities
                 DatabaseActivities.create_session,
+                DatabaseActivities.create_session_with_id,
                 DatabaseActivities.save_conversation_turn,
                 DatabaseActivities.save_conversation_turn_with_tool_analytics,
                 DatabaseActivities.update_tool_statistics_for_session,

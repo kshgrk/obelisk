@@ -18,11 +18,21 @@ from contextlib import asynccontextmanager
 import sys
 import os
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 # Add the project root to Python path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-# Event system removed - using direct streaming from /chat endpoint
+# Import backend API router for Cloud Run compatibility
+try:
+    from src.api.router import api_router
+    BACKEND_AVAILABLE = True
+except ImportError:
+    logger.warning("Backend API router not available - running in frontend-only mode")
+    BACKEND_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -31,22 +41,38 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler for startup and shutdown"""
     # Startup
     logger.info("Starting Obelisk Frontend")
-    
+
+    # Initialize backend if available
+    if BACKEND_AVAILABLE:
+        try:
+            from src.database.manager import db_manager
+            await db_manager.initialize()
+            logger.info("Backend database initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize backend: {e}")
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down Obelisk Frontend")
 
 app = FastAPI(title="Obelisk Frontend", lifespan=lifespan)
 
-# Backend API base URL
-BACKEND_URL = "http://localhost:8001"
+# Include backend API router if available
+if BACKEND_AVAILABLE:
+    app.include_router(api_router, prefix="/api", tags=["backend"])
+
+# Backend API base URL (fallback for external calls if needed)
+BACKEND_URL = "http://127.0.0.1:8001"
 
 # Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # Setup templates
-templates = Jinja2Templates(directory="templates")
+templates_dir = os.path.join(os.path.dirname(__file__), "templates")
+templates = Jinja2Templates(directory=templates_dir)
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
@@ -57,15 +83,51 @@ async def root(request: Request):
 @app.get("/sessions")
 async def get_sessions():
     """Fetch sessions from backend database"""
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{BACKEND_URL}/sessions")
-            if response.status_code == 200:
-                # Return the sessions data in the expected format
-                return response.json()
-    except Exception as e:
-        print(f"Error fetching sessions from backend: {e}")
-    
+    if BACKEND_AVAILABLE:
+        try:
+            from src.database.manager import db_manager
+            await db_manager.initialize()
+            sessions = await db_manager.list_sessions(limit=50, offset=0)
+
+            # Format sessions for frontend compatibility
+            formatted_sessions = []
+            for session in sessions:
+                formatted_sessions.append({
+                    "id": session.id,
+                    "name": session.name or f"Session {session.id[:8]}",
+                    "status": "active",  # Default status
+                    "created_at": session.created_at.isoformat() if hasattr(session.created_at, 'isoformat') else str(session.created_at),
+                    "updated_at": session.updated_at.isoformat() if hasattr(session.updated_at, 'isoformat') else str(session.updated_at),
+                    "metadata": {
+                        "total_messages": 0,  # Will be updated when we implement message counting
+                        "total_turns": 0,
+                        "model": "unknown",
+                        "settings": {
+                            "temperature": 0.7,
+                            "max_tokens": 1000,
+                            "streaming": True
+                        },
+                        "statistics": {
+                            "last_response_time_ms": 0,
+                            "total_tokens_input": 0,
+                            "total_tokens_output": 0
+                        },
+                        "features_used": ["chat"],
+                        "user_preferences": {
+                            "streaming": True,
+                            "show_tool_calls": True
+                        },
+                        "last_updated": session.updated_at.isoformat() if hasattr(session.updated_at, 'isoformat') else str(session.updated_at)
+                    },
+                    "message_count": 0
+                })
+
+            return {"sessions": formatted_sessions}
+
+        except Exception as e:
+            print(f"Error fetching sessions from local backend: {e}")
+            # Fall through to mock data
+
     # Fallback to mock data matching the expected API structure
     return JSONResponse({
         "sessions": [
@@ -103,16 +165,16 @@ async def get_sessions():
 
 @app.get("/sessions/{session_id}")
 async def get_session_detail(session_id: str):
-    """Fetch detailed session data with conversation history"""
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{BACKEND_URL}/sessions/{session_id}")
-            if response.status_code == 200:
-                # Return the session data in the expected format
-                return response.json()
-    except Exception as e:
-        print(f"Error fetching session {session_id} from backend: {e}")
-    
+    """Fetch detailed session data using integrated backend"""
+    if BACKEND_AVAILABLE:
+        try:
+            from src.api.sessions import get_session_by_id
+            result = await get_session_by_id(session_id)
+            return result
+        except Exception as e:
+            print(f"Error fetching session {session_id} from local backend: {e}")
+            # Fall through to mock data
+
     # Fallback for unknown sessions - match the expected API structure
     return JSONResponse({
         "session_id": session_id,
@@ -203,155 +265,85 @@ def format_timestamp(timestamp_str):
 
 @app.post("/api/sessions")
 async def create_session(request: Request):
-    """Proxy session creation to backend"""
+    """Handle session creation using integrated backend"""
+    if not BACKEND_AVAILABLE:
+        return JSONResponse({
+            "error": "Backend not available - running in frontend-only mode"
+        }, status_code=503)
+
     try:
         body = await request.json()
-        async with httpx.AsyncClient() as client:
-            response = await client.post(f"{BACKEND_URL}/sessions", json=body)
-            
-            # Check if response is successful
-            if response.status_code == 200:
-                try:
-                    response_data = response.json()
-                    print(f"Session created successfully: {response_data}")
-                    return response_data
-                except Exception as json_error:
-                    print(f"Error parsing session response JSON: {json_error}")
-                    print(f"Response content: {response.text}")
-                    return JSONResponse({"error": "Invalid response from backend"}, status_code=500)
-            else:
-                print(f"Backend returned error {response.status_code}: {response.text}")
-                return JSONResponse({"error": f"Backend error: {response.status_code}"}, status_code=response.status_code)
-                
+        from src.api.sessions import create_session as backend_create_session
+        from pydantic import BaseModel
+
+        # Create a ChatSessionCreate object
+        class ChatSessionCreate(BaseModel):
+            name: str = None
+
+        session_data = ChatSessionCreate(**body)
+        result = await backend_create_session(session_data)
+        return result
+
     except Exception as e:
         print(f"Error creating session: {e}")
         return JSONResponse({"error": "Failed to create session"}, status_code=500)
 
 @app.post("/api/chat")
 async def send_message(request: Request):
-    """Proxy chat messages to backend using the /chat endpoint with conversation history"""
+    """Handle chat messages using integrated backend API"""
+    if not BACKEND_AVAILABLE:
+        return JSONResponse({
+            "error": "Backend not available - running in frontend-only mode"
+        }, status_code=503)
+
     try:
         body = await request.json()
         print(f"Frontend received chat request: {body}")
-        
+
         # Extract data from frontend request
         message_content = body.get("message", "")
         session_id = body.get("session_id")
         stream = body.get("stream", False)
         config_override = body.get("config_override")  # Extract config_override
-        
+
         if not session_id:
             return JSONResponse({"error": "session_id is required"}, status_code=400)
-        
+
         if not message_content.strip():
             return JSONResponse({"error": "message cannot be empty"}, status_code=400)
-        
-        # Create request for backend /chat endpoint
-        chat_request = {
-            "session_id": session_id,
-            "message": message_content,
-            "stream": stream
-        }
-        
-        # Add config_override if provided
-        if config_override:
-            chat_request["config_override"] = config_override
-        
-        # Add timeout to prevent hanging
-        timeout = httpx.Timeout(60.0)  # Increased to 60s for chat workflows
-        
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            print(f"Forwarding to: {BACKEND_URL}/chat")
-            response = await client.post(f"{BACKEND_URL}/chat", json=chat_request)
-            print(f"Backend response status: {response.status_code}")
-            
-            if response.status_code != 200:
-                error_text = response.text
-                print(f"Backend error response: {error_text}")
-                return JSONResponse({
-                    "error": f"Backend error: {error_text}",
-                    "status_code": response.status_code
-                }, status_code=response.status_code)
-            
-            # Handle streaming vs non-streaming responses
-            if stream:
-                # For streaming responses, we need to collect all the chunks
-                full_content = ""
-                content_type = response.headers.get("content-type", "")
-                
-                if "text/plain" in content_type:  # Streaming response
-                    response_text = response.text
-                    
-                    # Parse the SSE streaming data to extract content
-                    lines = response_text.split('\n')
-                    for line in lines:
-                        if line.startswith('data: ') and not line.endswith('[DONE]'):
-                            try:
-                                chunk_data = json.loads(line[6:])  # Remove 'data: '
-                                if 'content' in chunk_data:
-                                    full_content += chunk_data['content']
-                            except json.JSONDecodeError:
-                                continue
-                    
-                    response_content = full_content
-                else:
-                    # Try to parse as JSON
-                    try:
-                        result = response.json()
-                        response_content = result.get("response", result.get("content", "No response received"))
-                    except json.JSONDecodeError:
-                        response_content = response.text
-            else:
-                # Non-streaming response
-                try:
-                    result = response.json()
-                    response_content = result.get("response", result.get("content", "No response received"))
-                except json.JSONDecodeError:
-                    response_content = response.text
-            
-            print(f"Processed response content: {response_content[:100]}...")
-            
-            # Get the actual model used from config_override or check backend response
-            actual_model = "unknown"
-            if config_override and config_override.get("model"):
-                actual_model = config_override["model"]
-            else:
-                # Try to get from backend response if available
-                try:
-                    backend_result = response.json()
-                    actual_model = backend_result.get("model", "unknown")
-                except:
-                    actual_model = "unknown"
-            
-            print(f"Using model in response: {actual_model}")
-            
-            # Return in OpenRouter-compatible format for frontend consistency
-            return {
-                "id": f"chatcmpl-{session_id[-8:]}",
-                "object": "chat.completion",
-                "created": int(datetime.now().timestamp()),
-                "model": actual_model,  # Use actual model instead of hardcoded
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": response_content
-                    },
-                    "finish_reason": "stop"
-                }],
-                "usage": {
-                    "prompt_tokens": len(message_content.split()),
-                    "completion_tokens": len(response_content.split()),
-                    "total_tokens": len(message_content.split()) + len(response_content.split())
-                }
-            }
-            
-    except httpx.TimeoutException:
-        print("Request timed out")
-        return JSONResponse({
-            "error": "Request timed out. Please try again.",
-            "timeout": True
-        }, status_code=504)
+
+        # Use the integrated backend API instead of proxying
+        try:
+            from src.api.chat import simple_chat
+            from pydantic import BaseModel
+
+            # Create a SimpleChatRequest object
+            class SimpleChatRequest(BaseModel):
+                session_id: str
+                message: str
+                model_id: str = None
+                stream: bool = True
+                config_override: dict = None
+
+            chat_request = SimpleChatRequest(
+                session_id=session_id,
+                message=message_content,
+                stream=stream,
+                config_override=config_override
+            )
+
+            # Call the simple_chat function directly
+            result = await simple_chat(chat_request)
+
+            # Return the result as-is since simple_chat handles formatting
+            return result
+
+        except Exception as chat_error:
+            print(f"Error calling chat endpoint: {chat_error}")
+            return JSONResponse({
+                "error": f"Chat processing failed: {str(chat_error)}"
+            }, status_code=500)
+
     except Exception as e:
         print(f"Error in send_message: {e}")
         return JSONResponse({
@@ -360,34 +352,71 @@ async def send_message(request: Request):
 
 @app.post("/api/chat/completions")
 async def chat_completions(request: Request):
-    """Proxy OpenAI-compatible completions to backend"""
+    """Handle OpenAI-compatible completions using integrated backend"""
+    if not BACKEND_AVAILABLE:
+        return JSONResponse({
+            "error": "Backend not available - running in frontend-only mode"
+        }, status_code=503)
+
     try:
         body = await request.json()
-        async with httpx.AsyncClient() as client:
-            response = await client.post(f"{BACKEND_URL}/chat/completions", json=body)
-            return response.json()
+        from src.api.chat import chat_completions as backend_chat_completions
+        from pydantic import BaseModel
+
+        # Create a ChatCompletionRequest object
+        class ChatCompletionRequest(BaseModel):
+            model: str = None
+            messages: list
+            stream: bool = False
+            max_tokens: int = None
+            temperature: float = None
+
+        completion_request = ChatCompletionRequest(**body)
+        result = await backend_chat_completions(completion_request)
+        return result
+
     except Exception as e:
         print(f"Error with chat completions: {e}")
         return JSONResponse({"error": "Failed to process completion"}, status_code=500)
 
 @app.post("/api/models/refresh")
 async def refresh_models():
-    """Proxy to backend models refresh endpoint"""
+    """Handle models refresh using integrated backend"""
+    if not BACKEND_AVAILABLE:
+        return JSONResponse({
+            "error": "Backend not available - running in frontend-only mode"
+        }, status_code=503)
+
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(f"{BACKEND_URL}/models/refresh")
-            return response.json()
+        # Import the refresh_models function directly
+        from src.api.router import refresh_models as backend_refresh_models
+
+        # Call the backend function directly
+        result = await backend_refresh_models()
+        return result
+
     except Exception as e:
         print(f"Error refreshing models: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 @app.get("/api/models")
 async def get_models(tools_only: bool = False):
-    """Proxy to backend models get endpoint"""
+    """Handle models retrieval using integrated backend"""
+    if not BACKEND_AVAILABLE:
+        return JSONResponse({
+            "error": "Backend not available - running in frontend-only mode",
+            "models": [],
+            "count": 0
+        }, status_code=503)
+
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{BACKEND_URL}/models", params={"tools_only": tools_only})
-            return response.json()
+        # Import the get_models function directly
+        from src.api.router import get_models as backend_get_models
+
+        # Call the backend function directly
+        result = await backend_get_models(tools_only=tools_only)
+        return result
+
     except Exception as e:
         print(f"Error getting models: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -398,4 +427,7 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3000) 
+    import os
+    # Use PORT environment variable for Cloud Run compatibility (defaults to 8080 for Cloud Run)
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port) 

@@ -1,0 +1,323 @@
+# MCP (Model Context Protocol) Server Implementation Tasks
+
+## Phase 1: Core MCP Infrastructure
+
+### 1.1 MCP Protocol Foundation
+- [ ] **Create MCP protocol schemas** (`src/mcp/schemas.py`)
+  - Implement Pydantic models for MCP JSON-RPC message types (Request, Response, Notification, Error)
+  - Add MCP-specific types: Resource, Tool, Prompt, Capability definitions
+  - Implement protocol version negotiation schemas (2024-11-05, 2025-03-26)
+  - Add transport-agnostic message serialization/deserialization
+
+- [ ] **Implement MCP Session Management** (`src/mcp/session.py`)
+  - Create `McpSession` class for handling bidirectional communication
+  - Implement request/response correlation and timeout handling
+  - Add capability negotiation during initialization phase
+  - Support concurrent request handling with async/await
+  - Implement proper error handling and protocol compliance
+
+- [ ] **Create MCP Server Core** (`src/mcp/server.py`)
+  - Implement `McpServer` class with request handler registration
+  - Add lifecycle management (initialize → initialized → operation phases)
+  - Support capability declaration and negotiation
+  - Implement server information metadata (name, version, capabilities)
+  - Add request routing to appropriate handlers
+
+### 1.2 Transport Layer Implementation
+
+- [ ] **Stdio Transport** (`src/mcp/transports/stdio.py`)
+  - Implement `StdioServerTransport` for command-line MCP clients
+  - Handle stdin/stdout JSON-RPC communication
+  - Add proper process lifecycle management
+  - Support graceful shutdown and cleanup
+  - Implement message framing for line-delimited JSON
+
+- [ ] **HTTP Transport** (`src/mcp/transports/http.py`)
+  - Implement `HttpServerTransport` using FastAPI integration
+  - Support POST requests for JSON-RPC messages
+  - Add GET endpoint for Server-Sent Events (SSE) streaming
+  - Implement proper CORS and security headers
+  - Add HTTP status code mapping for MCP errors
+
+- [ ] **WebSocket Transport** (`src/mcp/transports/websocket.py`)
+  - Implement `WebSocketServerTransport` for real-time communication
+  - Support bidirectional message streaming
+  - Add connection lifecycle management
+  - Implement heartbeat/ping-pong for connection health
+  - Handle WebSocket close codes properly
+
+## Phase 2: Tool Integration & Bridge Layer
+
+### 2.1 Tool System Bridge
+
+- [ ] **Create MCP Tool Adapter** (`src/mcp/adapters/tools.py`)
+  - Bridge existing `BaseTool` instances to MCP tool schema
+  - Convert tool definitions to MCP-compatible format
+  - Map tool parameters to JSON Schema format
+  - Handle tool execution context translation
+  - Implement result formatting for MCP responses
+
+- [ ] **Tool Discovery Service** (`src/mcp/services/tool_discovery.py`)
+  - Integrate with existing `ToolRegistry` for tool enumeration
+  - Support dynamic tool registration/unregistration
+  - Implement tool filtering based on client capabilities
+  - Add tool versioning and deprecation support
+  - Support model-specific tool availability
+
+- [ ] **Tool Execution Bridge** (`src/mcp/services/tool_executor.py`)
+  - Bridge MCP tool calls to existing Temporal activities
+  - Implement async tool execution with proper error handling
+  - Support tool call batching and parallel execution
+  - Add execution metrics and monitoring integration
+  - Implement timeout and cancellation support
+
+### 2.2 Enhanced Tool Capabilities
+
+- [ ] **Tool Call Context Enhancement** (`src/mcp/contexts/tool_context.py`)
+  - Extend `ToolExecutionContext` with MCP session information
+  - Add client capability awareness to tool execution
+  - Support MCP-specific metadata and headers
+  - Implement session-scoped tool state management
+  - Add audit logging for MCP tool calls
+
+## Phase 3: Resources & Prompts Implementation
+
+### 3.1 Resource System
+
+- [ ] **Resource Provider Interface** (`src/mcp/resources/base.py`)
+  - Create abstract `ResourceProvider` class
+  - Define resource schemas (file, database, API, logs)
+  - Implement resource URI handling and validation
+  - Add resource metadata and MIME type detection
+  - Support resource subscription and change notifications
+
+- [ ] **File System Resources** (`src/mcp/resources/filesystem.py`)
+  - Implement file and directory access as MCP resources
+  - Add security restrictions and path validation
+  - Support file watching for change notifications
+  - Implement MIME type detection and content streaming
+  - Add permission-based access control
+
+- [ ] **Database Resources** (`src/mcp/resources/database.py`)
+  - Expose database contents as queryable resources
+  - Implement SQL query interface for data access
+  - Add schema introspection capabilities
+  - Support real-time query results
+  - Implement connection pooling and security
+
+- [ ] **Log Resources** (`src/mcp/resources/logs.py`)
+  - Expose application logs as streamable resources
+  - Support log filtering and search capabilities
+  - Implement real-time log streaming
+  - Add log level and component filtering
+  - Support structured log parsing
+
+### 3.2 Prompt System
+
+- [ ] **Prompt Template Engine** (`src/mcp/prompts/engine.py`)
+  - Create prompt template system with parameter substitution
+  - Support Jinja2-style templating for complex prompts
+  - Implement prompt validation and type checking
+  - Add prompt versioning and inheritance
+  - Support conditional prompt logic
+
+- [ ] **Prompt Registry** (`src/mcp/prompts/registry.py`)
+  - Create registry for prompt template management
+  - Support dynamic prompt registration and discovery
+  - Implement prompt categorization and tagging
+  - Add prompt usage analytics and optimization
+  - Support A/B testing for prompt variations
+
+## Phase 4: Advanced MCP Features
+
+### 4.1 Streaming & Real-time Support
+
+- [ ] **Server-Sent Events (SSE)** (`src/mcp/streaming/sse.py`)
+  - Implement SSE streaming for real-time updates
+  - Support resource change notifications
+  - Add tool execution progress streaming
+  - Implement event buffering and replay capability
+  - Add client reconnection and resume support
+
+- [ ] **Notification System** (`src/mcp/notifications/`)
+  - Implement server-to-client notifications
+  - Support resource update notifications
+  - Add tool availability change notifications
+  - Implement prompt template updates
+  - Support batch notification delivery
+
+### 4.2 Security & Authentication
+
+- [ ] **OAuth 2.0 Integration** (`src/mcp/auth/oauth.py`)
+  - Implement OAuth 2.0 authorization server metadata
+  - Add client registration and authentication
+  - Support scope-based access control
+  - Implement token validation and refresh
+  - Add PKCE support for secure flows
+
+- [ ] **Permission System** (`src/mcp/auth/permissions.py`)
+  - Extend existing tool permissions to MCP
+  - Implement resource-level access control
+  - Add prompt access restrictions
+  - Support role-based access control (RBAC)
+  - Implement audit logging for security events
+
+## Phase 5: Configuration & Integration
+
+### 5.1 Configuration Management
+
+- [ ] **MCP Server Configuration** (`src/config/mcp_settings.py`)
+  - Add MCP-specific configuration to existing settings
+  - Support multiple transport configurations
+  - Add security and authentication settings
+  - Implement feature flags for MCP capabilities
+  - Support environment-based configuration
+
+- [ ] **Server Discovery** (`src/mcp/discovery/server_info.py`)
+  - Implement MCP server metadata endpoints
+  - Add server capability advertisement
+  - Support version negotiation and compatibility
+  - Implement health check endpoints
+  - Add server statistics and metrics
+
+### 5.2 Temporal Integration
+
+- [ ] **MCP Workflow Integration** (`src/temporal/workflows/mcp_server.py`)
+  - Create Temporal workflow for MCP server lifecycle
+  - Integrate MCP sessions with existing workflows
+  - Support fault-tolerant MCP operations
+  - Add MCP activity implementations
+  - Implement workflow-based resource management
+
+- [ ] **MCP Activity Bridge** (`src/temporal/activities/mcp.py`)
+  - Bridge MCP operations to Temporal activities
+  - Support long-running MCP operations
+  - Implement activity retries and error handling
+  - Add MCP-specific activity monitoring
+  - Support activity cancellation and timeouts
+
+## Phase 6: API & CLI Integration
+
+### 6.1 FastAPI Integration
+
+- [ ] **MCP API Endpoints** (`src/api/mcp.py`)
+  - Add MCP server management endpoints to existing API
+  - Support HTTP transport for MCP protocol
+  - Implement WebSocket endpoints for real-time MCP
+  - Add health check and status endpoints
+  - Integrate with existing CORS and middleware
+
+- [ ] **MCP Client Utilities** (`src/mcp/client/`)
+  - Create MCP client implementation for testing
+  - Support all transport types (stdio, HTTP, WebSocket)
+  - Implement client-side capability negotiation
+  - Add tool calling and resource access clients
+  - Support prompt interaction workflows
+
+### 6.2 CLI Commands
+
+- [ ] **MCP Server CLI** (`src/cli_mcp.py`)
+  - Add CLI commands for MCP server management
+  - Support starting MCP server with different transports
+  - Add tool and resource discovery commands
+  - Implement prompt testing and validation
+  - Support configuration management commands
+
+## Phase 7: Testing & Documentation
+
+### 7.1 Comprehensive Testing
+
+- [ ] **Unit Tests** (`src/tests/mcp/`)
+  - Test all MCP protocol implementations
+  - Test transport layer functionality
+  - Test tool, resource, and prompt systems
+  - Test security and authentication
+  - Test error handling and edge cases
+
+- [ ] **Integration Tests** (`src/tests/integration/mcp/`)
+  - Test full MCP client-server interactions
+  - Test with multiple transport types
+  - Test real-world scenarios and workflows
+  - Test performance and scalability
+  - Test security and access control
+
+- [ ] **End-to-End Tests** (`src/tests/e2e/mcp/`)
+  - Test with actual MCP clients (Claude Desktop, etc.)
+  - Test tool execution workflows
+  - Test resource access patterns
+  - Test prompt interaction flows
+  - Test error recovery scenarios
+
+### 7.2 Documentation & Examples
+
+- [ ] **MCP Documentation** (`docs/mcp/`)
+  - Create comprehensive MCP implementation guide
+  - Document all transport configurations
+  - Add tool, resource, and prompt development guides
+  - Document security and authentication setup
+  - Add troubleshooting and FAQ sections
+
+- [ ] **Example Implementations** (`examples/mcp/`)
+  - Create simple MCP server examples
+  - Add complex tool integration examples
+  - Create resource provider examples
+  - Add prompt template examples
+  - Create client integration examples
+
+## Phase 8: Production Readiness
+
+### 8.1 Monitoring & Observability
+
+- [ ] **MCP Metrics** (`src/mcp/monitoring/metrics.py`)
+  - Add Prometheus metrics for MCP operations
+  - Track connection counts and session durations
+  - Monitor tool execution performance
+  - Track resource access patterns
+  - Add error rate and latency metrics
+
+- [ ] **Logging Integration** (`src/mcp/monitoring/logging.py`)
+  - Integrate MCP operations with existing logging
+  - Add structured logging for MCP events
+  - Support log correlation across components
+  - Add debug logging for protocol messages
+  - Implement log aggregation and analysis
+
+### 8.2 Deployment & Scaling
+
+- [ ] **Docker Integration** (`docker/mcp/`)
+  - Create Docker images for MCP server
+  - Add docker-compose configurations
+  - Support multi-transport deployments
+  - Add health checks and monitoring
+  - Support horizontal scaling scenarios
+
+- [ ] **Production Configuration** (`configs/production/`)
+  - Add production-ready MCP configurations
+  - Configure security and authentication
+  - Set up monitoring and alerting
+  - Add backup and recovery procedures
+  - Document operational procedures
+
+## Implementation Notes:
+
+### Architecture Principles:
+1. **Preserve Existing System**: All existing tool functionality must remain unchanged
+2. **Layered Approach**: MCP layer should sit on top of existing tool system
+3. **Transport Agnostic**: Core MCP logic should work with any transport
+4. **Security First**: Implement proper authentication and authorization
+5. **Performance**: Maintain existing performance characteristics
+6. **Fault Tolerance**: Integrate with existing Temporal-based reliability
+
+### Key Integration Points:
+1. **Tool Registry**: Bridge existing tools to MCP protocol
+2. **Temporal Workflows**: Use existing workflow infrastructure
+3. **Database**: Extend existing database schema for MCP metadata
+4. **Configuration**: Extend existing settings system
+5. **API**: Add MCP endpoints to existing FastAPI application
+
+### Technical Considerations:
+1. **Protocol Compliance**: Ensure strict MCP specification compliance
+2. **Backwards Compatibility**: Maintain existing API contracts
+3. **Resource Management**: Implement proper cleanup and lifecycle management
+4. **Error Handling**: Provide clear error messages and recovery paths
+5. **Testing**: Extensive testing with real MCP clients

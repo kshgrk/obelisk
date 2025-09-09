@@ -61,7 +61,10 @@ class SimpleChatWorkflow:
             if config_override and config_override.get("model"):
                 initial_model = config_override["model"]
                 workflow.logger.info(f"Model override requested via config_override: {initial_model}")
-            
+
+            # Initialize model variable
+            model = initial_model
+
             # Step 0.6: Get current model from dynamic tool registry (check if session exists)
             current_session_state = await workflow.execute_activity(
                 "get_session_tool_state",
@@ -69,12 +72,12 @@ class SimpleChatWorkflow:
                 start_to_close_timeout=timedelta(seconds=10),
                 retry_policy=retry_policy,
             )
-            
+
             if current_session_state.get("success") and current_session_state.get("current_model"):
                 # Session already exists, check if model switch is needed
                 current_model = current_session_state["current_model"]
                 workflow.logger.info(f"Found existing session with model: {current_model}")
-                
+
                 if initial_model != current_model:
                     # Switch to requested model
                     workflow.logger.info(f"Switching model from {current_model} to {initial_model}")
@@ -84,7 +87,7 @@ class SimpleChatWorkflow:
                         start_to_close_timeout=timedelta(seconds=15),
                         retry_policy=retry_policy,
                     )
-                    
+
                     if switch_result.get("success"):
                         workflow.logger.info(f"Model switch successful: {switch_result.get('old_model')} → {switch_result.get('new_model')}")
                         model = initial_model
@@ -94,9 +97,20 @@ class SimpleChatWorkflow:
                 else:
                     model = current_model
             else:
-                # New session - use the initial model
+                # New session - create it first, then use the initial model
+                workflow.logger.info(f"New session - creating session {session_id} and using model: {model}")
+                create_result = await workflow.execute_activity(
+                    "create_session_with_id",
+                    args=[session_id, f"Chat Session {session_id[:8]}"],  # Pass session_id and name
+                    start_to_close_timeout=timedelta(seconds=10),
+                    retry_policy=retry_policy,
+                )
+
+                if not create_result.get("success"):
+                    workflow.logger.error(f"Failed to create session {session_id}: {create_result.get('error')}")
+                    raise ValueError(f"Failed to create session {session_id}")
+
                 model = initial_model
-                workflow.logger.info(f"New session - using model: {model}")
             
             # Step 0.7: Initialize or update session tool state
             session_state_init = await workflow.execute_activity(

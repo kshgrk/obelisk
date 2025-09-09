@@ -1,0 +1,96 @@
+# Cloud Run Optimized Dockerfile
+FROM python:3.12-slim
+
+# Set environment variables for Cloud Run
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app
+ENV PORT=8080
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    supervisor \
+    wget \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Install Temporal CLI
+RUN wget -q https://github.com/temporalio/cli/releases/download/v0.12.0/temporal_cli_0.12.0_linux_amd64.tar.gz -O /tmp/temporal_cli.tar.gz && \
+    tar -xzf /tmp/temporal_cli.tar.gz -C /usr/local/bin && \
+    rm /tmp/temporal_cli.tar.gz && \
+    chmod +x /usr/local/bin/temporal
+
+# Create Temporal directories
+RUN mkdir -p /var/lib/temporal /var/log/temporal /var/log/supervisor
+
+# Create non-root user for security
+RUN useradd --create-home --shell /bin/bash --user-group --uid 1001 app
+
+# Set work directory
+WORKDIR /app
+
+# Copy dependency files first for better layer caching
+COPY pyproject.toml ./
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -e . && \
+    pip cache purge
+
+# Copy application code
+COPY . .
+
+# Explicitly copy environment file (excluded by .dockerignore)
+COPY .env /app/.env
+
+# Create necessary directories and set permissions
+RUN mkdir -p /app/data /app/logs /var/log/supervisor && \
+    chown -R app:app /app /var/lib/temporal /var/log/temporal /var/log/supervisor
+
+# Configure supervisor to run frontend, temporal, and worker
+RUN echo '[supervisord]\n\
+nodaemon=true\n\
+logfile=/app/logs/supervisord.log\n\
+logfile_maxbytes=50MB\n\
+logfile_backups=10\n\
+loglevel=info\n\
+\n\
+[program:temporal]\n\
+command=temporal server start-dev --port 7233 --namespace default --db-filename /var/lib/temporal/temporal.db --headless\n\
+directory=/app\n\
+user=app\n\
+autostart=true\n\
+autorestart=true\n\
+stdout_logfile=/app/logs/temporal.log\n\
+stderr_logfile=/app/logs/temporal_error.log\n\
+\n\
+[program:worker]\n\
+command=python src/temporal/workers/simple_chat_worker.py\n\
+directory=/app\n\
+user=app\n\
+autostart=true\n\
+autorestart=true\n\
+stdout_logfile=/app/logs/worker.log\n\
+stderr_logfile=/app/logs/worker_error.log\n\
+\n\
+[program:frontend]\n\
+command=python frontend/app.py\n\
+directory=/app\n\
+user=app\n\
+autostart=true\n\
+autorestart=true\n\
+stdout_logfile=/app/logs/frontend.log\n\
+stderr_logfile=/app/logs/frontend_error.log\n\
+' > /etc/supervisor/conf.d/obelisk.conf
+
+# Switch to non-root user
+USER app
+
+# Health check for Cloud Run (port 8080)
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Start supervisor (which manages all services)
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/obelisk.conf"]
