@@ -141,6 +141,7 @@ class ConfigManager {
         this.refreshModelsBtn = document.getElementById('refreshModelsBtn');
         this.modelSearch = document.getElementById('modelSearch');
         this.toolsOnlyFilter = document.getElementById('toolsOnlyFilter');
+        this.freeOnlyFilter = document.getElementById('freeOnlyFilter');
 
         // Value display elements
         this.temperatureValue = document.getElementById('temperatureValue');
@@ -150,9 +151,10 @@ class ConfigManager {
         this.previewTemperature = document.getElementById('previewTemperature');
         this.previewMaxTokens = document.getElementById('previewMaxTokens');
 
+
         // Bind events
         this.bindEvents();
-        
+
         // Initialize values
         this.loadCurrentConfig();
     }
@@ -169,6 +171,7 @@ class ConfigManager {
         this.refreshModelsBtn.addEventListener('click', () => this.refreshModels());
         this.modelSearch.addEventListener('input', () => this.filterModels());
         this.toolsOnlyFilter.addEventListener('change', () => this.filterModels());
+        this.freeOnlyFilter.addEventListener('change', () => this.filterModels());
 
         // Close modal on overlay click
         this.modal.addEventListener('click', (e) => {
@@ -230,6 +233,7 @@ class ConfigManager {
         };
 
         appState.updateAiConfig(newConfig);
+
         
         // Immediately update the session header to show the new config
         this.updateSessionHeaderWithNewConfig(newConfig);
@@ -269,18 +273,22 @@ class ConfigManager {
         }
     }
 
+
+
     async loadModels() {
         try {
-            const response = await fetch('/api/models');
+            const freeOnly = this.freeOnlyFilter ? this.freeOnlyFilter.checked : false;
+            const params = freeOnly ? '?free_only=true' : '';
+            const response = await fetch(`/api/models${params}`);
             const data = await response.json();
-            
+
             if (data.status === 'success') {
                 this.allModels = data.models;
                 this.filterModels();
             } else {
                 // Fallback to default models if API fails
                 this.allModels = [
-                    { id: "deepseek/deepseek-chat-v3-0324:free", name: "DeepSeek Chat v3 (Default)", is_tool_call: true }
+                    { id: "deepseek/deepseek-chat-v3-0324:free", name: "DeepSeek Chat v3 (Default)", is_tool_call: true, is_free: true }
                 ];
                 this.filterModels();
             }
@@ -288,7 +296,7 @@ class ConfigManager {
             console.warn('Failed to load models:', error);
             // Fallback to default models
             this.allModels = [
-                { id: "deepseek/deepseek-chat-v3-0324:free", name: "DeepSeek Chat v3 (Default)", is_tool_call: true }
+                { id: "deepseek/deepseek-chat-v3-0324:free", name: "DeepSeek Chat v3 (Default)", is_tool_call: true, is_free: true }
             ];
             this.filterModels();
         }
@@ -303,7 +311,11 @@ class ConfigManager {
             const data = await response.json();
             
             if (data.status === 'success') {
-                notifications.success(`Refreshed ${data.models_count} models (${data.tool_models_count} with tools)`);
+                const freeCount = data.free_count || 0;
+                const paidCount = data.paid_count || 0;
+                const toolCount = data.tool_models_count || 0;
+                notifications.success(`Refreshed ${data.models_count} models (${freeCount} free, ${paidCount} paid, ${toolCount} with tools)`);
+                // Reload models considering current filter state
                 await this.loadModels();
             } else {
                 notifications.error(`Failed to refresh models: ${data.error}`);
@@ -320,21 +332,23 @@ class ConfigManager {
     filterModels() {
         const searchTerm = this.modelSearch.value.toLowerCase();
         const toolsOnly = this.toolsOnlyFilter.checked;
-        
+        const freeOnly = this.freeOnlyFilter.checked;
+
         this.filteredModels = this.allModels.filter(model => {
-            const matchesSearch = model.name.toLowerCase().includes(searchTerm) || 
+            const matchesSearch = model.name.toLowerCase().includes(searchTerm) ||
                                 model.id.toLowerCase().includes(searchTerm);
-            const matchesFilter = !toolsOnly || model.is_tool_call;
-            
-            return matchesSearch && matchesFilter;
+            const matchesToolsFilter = !toolsOnly || model.is_tool_call;
+            const matchesFreeFilter = !freeOnly || (model.is_free !== false); // Allow models where is_free is true or undefined
+
+            return matchesSearch && matchesToolsFilter && matchesFreeFilter;
         });
-        
+
         this.renderModelOptions();
     }
 
     renderModelOptions() {
         this.modelSelect.innerHTML = '';
-        
+
         if (this.filteredModels.length === 0) {
             const option = document.createElement('option');
             option.value = '';
@@ -343,30 +357,52 @@ class ConfigManager {
             this.modelSelect.appendChild(option);
             return;
         }
-        
+
         this.filteredModels.forEach(model => {
             const option = document.createElement('option');
             option.value = model.id;
-            
-            // Create text content with tool indicator and context length
+
+            // Create text content with tool indicator, pricing, and context length
             const toolIndicator = model.is_tool_call ? '🔧 ' : '';
+            const pricingIndicator = (model.is_free === false && model.pricing) ? '💰 ' : '';
             const contextLength = model.context_length ? this.formatContextLength(model.context_length) : '';
-            
-            if (contextLength) {
-                // Create right-aligned context length with visual separation
-                const baseName = `${toolIndicator}${model.name}`;
-                const paddingLength = Math.max(2, 45 - baseName.length - contextLength.length);
+
+            // Parse pricing information for display
+            let pricingText = '';
+            if (model.is_free === false && model.pricing) {
+                try {
+                    const pricing = typeof model.pricing === 'string' ? JSON.parse(model.pricing) : model.pricing;
+                    if (pricing.prompt && pricing.completion) {
+                        pricingText = `$${pricing.prompt}/$${pricing.completion}`;
+                    }
+                } catch (e) {
+                    console.warn('Failed to parse pricing for model:', model.id, e);
+                }
+            }
+
+            if (contextLength || pricingText) {
+                // Create right-aligned context length and pricing with visual separation
+                const baseName = `${pricingIndicator}${toolIndicator}${model.name}`;
+                const suffix = pricingText && contextLength
+                    ? `(${contextLength}) ${pricingText}`
+                    : pricingText
+                        ? pricingText
+                        : `(${contextLength})`;
+
+                const paddingLength = Math.max(2, 50 - baseName.length - suffix.length);
                 const padding = ' '.repeat(paddingLength);
-                option.textContent = `${baseName}${padding}(${contextLength})`;
-                option.setAttribute('data-has-context', 'true');
+                option.textContent = `${baseName}${padding}${suffix}`;
+                option.setAttribute('data-has-pricing', pricingText ? 'true' : 'false');
+                option.setAttribute('data-has-context', contextLength ? 'true' : 'false');
             } else {
-                option.textContent = `${toolIndicator}${model.name}`;
+                option.textContent = `${pricingIndicator}${toolIndicator}${model.name}`;
+                option.setAttribute('data-has-pricing', 'false');
                 option.setAttribute('data-has-context', 'false');
             }
-            
+
             this.modelSelect.appendChild(option);
         });
-        
+
         // Restore current selection if it exists in filtered models
         const currentModel = appState.aiConfig.model;
         if (this.filteredModels.some(m => m.id === currentModel)) {
@@ -375,7 +411,7 @@ class ConfigManager {
             // Select first available model if current isn't in filtered list
             this.modelSelect.value = this.filteredModels[0].id;
         }
-        
+
         this.updatePreview();
     }
 
@@ -462,7 +498,17 @@ class DOMManager {
             closeConfigModal: document.getElementById('closeConfigModal'),
             cancelConfigBtn: document.getElementById('cancelConfigBtn'),
             saveConfigBtn: document.getElementById('saveConfigBtn'),
-            resetConfigBtn: document.getElementById('resetConfigBtn')
+            resetConfigBtn: document.getElementById('resetConfigBtn'),
+
+            // Settings Modal
+            settingsModal: document.getElementById('settingsModal'),
+            closeSettingsModal: document.getElementById('closeSettingsModal'),
+            closeSettingsModalBtn: document.getElementById('closeSettingsModalBtn'),
+            settingsApiKeyInput: document.getElementById('settingsApiKeyInput'),
+            toggleApiKeyVisibility: document.getElementById('toggleApiKeyVisibility'),
+            settingsCurrentApiKeyStatus: document.getElementById('settingsCurrentApiKeyStatus'),
+            testSettingsApiKeyBtn: document.getElementById('testSettingsApiKeyBtn'),
+            updateSettingsApiKeyBtn: document.getElementById('updateSettingsApiKeyBtn')
         };
     }
 
@@ -1399,8 +1445,244 @@ async function exportConversation() {
     }
 }
 
+// Settings Manager
+class SettingsManager {
+    constructor() {
+        this.initializeModal();
+    }
+
+    initializeModal() {
+        // Bind settings modal events
+        dom.elements.closeSettingsModal?.addEventListener('click', () => this.closeModal());
+        dom.elements.closeSettingsModalBtn?.addEventListener('click', () => this.closeModal());
+        dom.elements.settingsModal?.addEventListener('click', (e) => {
+            if (e.target === dom.elements.settingsModal) {
+                this.closeModal();
+            }
+        });
+
+        // API Key functionality
+        dom.elements.toggleApiKeyVisibility?.addEventListener('click', () => this.toggleApiKeyVisibility());
+        dom.elements.testSettingsApiKeyBtn?.addEventListener('click', () => this.testApiKey());
+        dom.elements.updateSettingsApiKeyBtn?.addEventListener('click', () => this.updateApiKey());
+
+        // API Key input validation
+        dom.elements.settingsApiKeyInput?.addEventListener('input', () => this.updateApiKeyButtonState());
+    }
+
+    openModal() {
+        this.loadCurrentApiKey();
+        dom.elements.settingsModal.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    }
+
+    closeModal() {
+        dom.elements.settingsModal.style.display = 'none';
+        document.body.style.overflow = 'auto';
+    }
+
+    async loadCurrentApiKey() {
+        try {
+            const response = await fetch('/api/api-key/current');
+            const data = await response.json();
+
+            this.updateApiKeyStatusDisplay(data);
+
+            // Preload the current API key if it exists
+            if (data.status === 'configured' && data.masked_key) {
+                // For security, we don't preload the actual key value
+                // Just show the masked version as placeholder
+                dom.elements.settingsApiKeyInput.placeholder = `Current: ${data.masked_key}`;
+            } else {
+                dom.elements.settingsApiKeyInput.placeholder = "Enter your OpenRouter API key";
+            }
+
+            this.updateApiKeyButtonState();
+        } catch (error) {
+            console.error('Failed to load API key status:', error);
+            this.updateApiKeyStatusDisplay({ status: 'error', message: 'Failed to load status' });
+        }
+    }
+
+    updateApiKeyStatusDisplay(status) {
+        let statusClass = 'status-not-configured';
+        let statusText = 'Not configured';
+        let iconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>';
+
+        if (status.status === 'configured') {
+            statusClass = 'status-configured';
+            statusText = `Configured: ${status.masked_key}`;
+            iconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c2.39 0 4.584.926 6.207 2.438L21 8"/><path d="M21 3v5h-5"/></svg>';
+        } else if (status.status === 'not_configured') {
+            statusClass = 'status-not-configured';
+            statusText = 'Not configured';
+            iconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>';
+        } else if (status.status === 'testing') {
+            statusClass = 'status-testing';
+            statusText = status.message || 'Testing API key...';
+            iconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c2.39 0 4.584.926 6.207 2.438L21 8"/><path d="M21 3v5h-5"/></svg>';
+        } else if (status.status === 'error') {
+            statusClass = 'status-error';
+            statusText = status.message || 'Error loading status';
+            iconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y3="13"/><line x1="12" y1="17" x2="12" y3="17"/></svg>';
+        }
+
+        dom.elements.settingsCurrentApiKeyStatus.className = `status-indicator ${statusClass}`;
+        dom.elements.settingsCurrentApiKeyStatus.innerHTML = `${iconSvg} ${statusText}`;
+    }
+
+    updateApiKeyButtonState() {
+        const apiKey = dom.elements.settingsApiKeyInput?.value?.trim();
+        const hasApiKey = apiKey && apiKey.length > 0;
+
+        if (dom.elements.testSettingsApiKeyBtn) {
+            dom.elements.testSettingsApiKeyBtn.disabled = !hasApiKey;
+        }
+        if (dom.elements.updateSettingsApiKeyBtn) {
+            dom.elements.updateSettingsApiKeyBtn.disabled = !hasApiKey;
+        }
+    }
+
+    toggleApiKeyVisibility() {
+        const input = dom.elements.settingsApiKeyInput;
+        const button = dom.elements.toggleApiKeyVisibility;
+
+        if (!input || !button) return;
+
+        const isPassword = input.type === 'password';
+        input.type = isPassword ? 'text' : 'password';
+
+        // Update button icon and state
+        button.classList.toggle('active', !isPassword);
+        button.innerHTML = isPassword
+            ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
+            : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+
+        button.title = isPassword ? 'Hide API key' : 'Show API key';
+    }
+
+    async testApiKey() {
+        const apiKey = dom.elements.settingsApiKeyInput?.value?.trim();
+        if (!apiKey) {
+            notifications.warning('Please enter an API key to test');
+            return;
+        }
+
+        // Show testing status
+        const testBtn = dom.elements.testSettingsApiKeyBtn;
+        const originalText = testBtn.textContent;
+        testBtn.disabled = true;
+        testBtn.textContent = 'Testing...';
+
+        this.updateApiKeyStatusDisplay({
+            status: 'testing',
+            message: 'Testing API key...'
+        });
+
+        try {
+            const response = await fetch('/api/api-key/test', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ api_key: apiKey })
+            });
+
+            const result = await response.json();
+
+            if (result.status === 'valid') {
+                this.updateApiKeyStatusDisplay({
+                    status: 'valid',
+                    message: 'API key is valid'
+                });
+                notifications.success('API key is valid!');
+            } else {
+                this.updateApiKeyStatusDisplay({
+                    status: 'invalid',
+                    message: result.message || 'API key is invalid'
+                });
+                notifications.error(result.message || 'API key is invalid');
+            }
+        } catch (error) {
+            console.error('API key test failed:', error);
+            this.updateApiKeyStatusDisplay({
+                status: 'error',
+                message: 'Test failed'
+            });
+            notifications.error('Failed to test API key');
+        } finally {
+            // Reset button
+            testBtn.disabled = false;
+            testBtn.textContent = originalText;
+        }
+    }
+
+    async updateApiKey() {
+        const apiKey = dom.elements.settingsApiKeyInput?.value?.trim();
+        if (!apiKey) {
+            notifications.warning('Please enter an API key to update');
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/api-key/update', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ api_key: apiKey })
+            });
+
+            const result = await response.json();
+
+            if (result.status === 'success') {
+                notifications.success('API key updated successfully!');
+
+                // Refresh settings cache across the application
+                await this.refreshSettings();
+
+                this.loadCurrentApiKey(); // Refresh the status display
+                dom.elements.settingsApiKeyInput.value = ''; // Clear the input
+            } else {
+                notifications.error(result.message || 'Failed to update API key');
+            }
+        } catch (error) {
+            console.error('API key update failed:', error);
+            notifications.error('Failed to update API key');
+        }
+    }
+
+    async refreshSettings() {
+        try {
+            const response = await fetch('/api/settings/refresh', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+
+            const result = await response.json();
+
+            if (result.status === 'success') {
+                console.log('Settings refreshed successfully');
+                return true;
+            } else {
+                console.error('Failed to refresh settings:', result.message);
+                return false;
+            }
+        } catch (error) {
+            console.error('Settings refresh failed:', error);
+            return false;
+        }
+    }
+}
+
+// Initialize settings manager
+const settingsManager = new SettingsManager();
+
+// Update openSettings function
 function openSettings() {
-    notifications.warning('Settings panel coming soon');
+    settingsManager.openModal();
 }
 
 async function testBackendConnection() {

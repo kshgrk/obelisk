@@ -169,6 +169,81 @@
         </main>
     </div>
 
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settingsModal" style="display: none;">
+        <div class="modal-content config-modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Settings</h3>
+                <button class="btn btn-ghost modal-close" id="closeSettingsModal">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="modal-body">
+                <div class="config-section">
+                    <h4 class="config-section-title">API Key Management</h4>
+
+                    <div class="config-group">
+                        <label class="config-label">Current Status</label>
+                        <div class="api-key-status" id="settingsApiKeyStatus">
+                            <span class="status-indicator" id="settingsCurrentApiKeyStatus">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <path d="M12 8v4"/>
+                                    <path d="M12 16h.01"/>
+                                </svg>
+                                Loading current key status...
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="config-group">
+                        <label class="config-label">OpenRouter API Key</label>
+                        <div class="api-key-input-group">
+                            <input type="password" class="config-input" id="settingsApiKeyInput"
+                                   placeholder="Enter your OpenRouter API key">
+                            <button type="button" class="btn btn-secondary api-key-btn" id="toggleApiKeyVisibility" title="Toggle visibility">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                    <circle cx="12" cy="12" r="3"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <p class="config-description">Enter your OpenRouter API key to enable AI model access. It should start with "sk-or-v1-"</p>
+                    </div>
+
+                    <div class="config-group">
+                        <div class="config-actions">
+                            <button class="btn btn-secondary" id="testSettingsApiKeyBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M9 12l2 2 4-4"/>
+                                    <path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c2.39 0 4.584.926 6.207 2.438L21 8"/>
+                                    <path d="M21 3v5h-5"/>
+                                </svg>
+                                Test Key
+                            </button>
+                            <button class="btn btn-primary" id="updateSettingsApiKeyBtn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2z"/>
+                                    <polyline points="17,8 12,3 7,8"/>
+                                    <line x1="12" y1="3" x2="12" y2="15"/>
+                                </svg>
+                                Save Key
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn btn-ghost" id="closeSettingsModalBtn">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Notification Container -->
     <div class="notification-container" id="notificationContainer"></div>
 
@@ -208,6 +283,14 @@
                                     </svg>
                                     Tools only
                                 </label>
+                                <label class="filter-checkbox">
+                                    <input type="checkbox" id="freeOnlyFilter">
+                                    <span class="checkmark"></span>
+                                    <svg class="free-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                                    </svg>
+                                    Free only
+                                </label>
                             </div>
                             <button class="btn btn-ghost refresh-models-btn" id="refreshModelsBtn" title="Refresh Models">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -224,19 +307,20 @@
                     </div>
                 </div>
 
+
                 <div class="config-section">
                     <h4 class="config-section-title">Generation Parameters</h4>
-                    
+
                     <div class="config-group">
                         <label class="config-label">Temperature: <span id="temperatureValue">1.0</span></label>
-                        <input type="range" class="config-slider" id="temperatureSlider" 
+                        <input type="range" class="config-slider" id="temperatureSlider"
                                min="0" max="2" step="0.1" value="1.0">
                         <p class="config-description">Controls randomness. Lower values make responses more focused and deterministic.</p>
                     </div>
 
                     <div class="config-group">
                         <label class="config-label">Max Tokens</label>
-                        <input type="number" class="config-input" id="maxTokensInput" 
+                        <input type="number" class="config-input" id="maxTokensInput"
                                min="100" max="10000" step="100" value="5000" placeholder="5000">
                         <p class="config-description">Maximum length of the AI response. Higher values allow longer responses.</p>
                     </div>

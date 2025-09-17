@@ -14,8 +14,8 @@ from collections import defaultdict, deque
 from typing import Dict, List
 import time
 import httpx
-import os
 from src.database.manager import db_manager
+from src.config.settings import settings
 
 # Create main API router
 api_router = APIRouter()
@@ -129,13 +129,13 @@ async def stream_events(session_id: str):
 async def refresh_models():
     """Fetch models from OpenRouter API and update database"""
     try:
-        # Get OpenRouter API key from environment
-        api_key = os.getenv("OPENROUTER_KEY")
+        # Get OpenRouter API key from database
+        api_key = settings.openrouter.api_key
         if not api_key:
-            return {"error": "OpenRouter API key not found"}, 400
+            return {"error": "OpenRouter API key not found in database"}, 400
         
         async with httpx.AsyncClient() as client:
-            # Fetch all free models
+            # Fetch all models (not just free ones)
             response = await client.get(
                 "https://openrouter.ai/api/v1/models",
                 headers={
@@ -143,35 +143,43 @@ async def refresh_models():
                     "Content-Type": "application/json"
                 }
             )
-            
+
             if response.status_code != 200:
                 return {"error": "Failed to fetch models from OpenRouter"}, 500
-            
+
             data = response.json()
             models_data = []
-            
+
             for model in data.get("data", []):
                 # Check if model is free (both prompt and completion pricing are "0")
                 pricing = model.get("pricing", {})
-                if pricing.get("prompt") == "0" and pricing.get("completion") == "0":
-                    # Check if model supports tools
-                    supported_params = model.get("supported_parameters", [])
-                    is_tool_call = "tools" in supported_params if supported_params else False
-                    
-                    models_data.append({
-                        "id": model["id"],
-                        "name": model["name"],
-                        "is_tool_call": is_tool_call,
-                        "context_length": model.get("context_length", 0)
-                    })
-            
+                is_free = pricing.get("prompt") == "0" and pricing.get("completion") == "0"
+
+                # Check if model supports tools
+                supported_params = model.get("supported_parameters", [])
+                is_tool_call = "tools" in supported_params if supported_params else False
+
+                models_data.append({
+                    "id": model["id"],
+                    "name": model["name"],
+                    "is_tool_call": is_tool_call,
+                    "context_length": model.get("context_length", 0),
+                    "is_free": int(is_free),  # Convert boolean to integer for database
+                    "pricing": json.dumps(pricing) if pricing else None
+                })
+
             # Save to database
             await db_manager.save_models(models_data)
-            
+
+            free_count = len([m for m in models_data if m["is_free"] == 1])
+            paid_count = len([m for m in models_data if m["is_free"] == 0])
+
             return {
                 "status": "success",
-                "message": f"Refreshed {len(models_data)} free models",
+                "message": f"Refreshed {len(models_data)} models ({free_count} free, {paid_count} paid)",
                 "models_count": len(models_data),
+                "free_models_count": free_count,
+                "paid_models_count": paid_count,
                 "tool_models_count": len([m for m in models_data if m["is_tool_call"]])
             }
             
@@ -180,18 +188,155 @@ async def refresh_models():
         return {"error": str(e)}, 500
 
 @api_router.get("/models")
-async def get_models(tools_only: bool = False):
-    """Get models from database, optionally filtered by tool call capability"""
+async def get_models(tools_only: bool = False, free_only: bool = False):
+    """Get models from database, optionally filtered by tool call capability or free status"""
     try:
-        models = await db_manager.get_models(tools_only=tools_only)
+        models = await db_manager.get_models(tools_only=tools_only, free_only=free_only)
+
+        # Calculate statistics
+        free_count = len([m for m in models if m["is_free"]])
+        paid_count = len([m for m in models if not m["is_free"]])
+        tool_count = len([m for m in models if m["is_tool_call"]])
+
         return {
-            "status": "success", 
+            "status": "success",
             "models": models,
-            "count": len(models)
+            "count": len(models),
+            "free_count": free_count,
+            "paid_count": paid_count,
+            "tool_models_count": tool_count
         }
     except Exception as e:
         logger.error(f"Error getting models: {e}")
         return {"error": str(e)}, 500
+
+# API Key Management Endpoints
+@api_router.post("/api-key/test")
+async def test_api_key(request: Request):
+    """Test if an API key is valid by format validation and OpenRouter API ping"""
+    try:
+        body = await request.json()
+        test_api_key = body.get("api_key", "")
+
+        if not test_api_key:
+            return {"error": "API key is required"}, 400
+
+        async with httpx.AsyncClient() as client:
+            # Simple validation: try to fetch auth info which requires authentication
+            response = await client.get(
+                "https://openrouter.ai/api/v1/auth/key",
+                headers={
+                    "Authorization": f"Bearer {test_api_key}",
+                    "Content-Type": "application/json"
+                },
+                timeout=10.0
+            )
+
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    # If we can parse the response and it has auth data, the key is valid
+                    if isinstance(data, dict):
+                        return {
+                            "status": "valid",
+                            "message": "API key is valid"
+                        }
+                    else:
+                        return {
+                            "status": "invalid",
+                            "message": "API key is invalid or expired"
+                        }, 401
+                except:
+                    return {
+                        "status": "invalid",
+                        "message": "API key is invalid or expired"
+                    }, 401
+            else:
+                return {
+                    "status": "invalid",
+                    "message": "API key is invalid or expired"
+                }, 401
+
+    except httpx.TimeoutException:
+        return {"error": "API key test timed out"}, 408
+    except Exception as e:
+        logger.error(f"Error testing API key: {e}")
+        return {"error": f"Failed to test API key: {str(e)}"}, 500
+
+@api_router.post("/api-key/update")
+async def update_api_key(request: Request):
+    """Update the OpenRouter API key in the database"""
+    try:
+        body = await request.json()
+        new_api_key = body.get("api_key", "")
+
+        if not new_api_key:
+            return {"error": "API key is required"}, 400
+
+        # Import the database manager
+        from src.database.manager import db_manager
+
+        # Update the API key in the database
+        success = await db_manager.update_config_value("openrouter_api_key", new_api_key)
+
+        if success:
+            # Refresh the settings cache to use the new API key immediately
+            from src.config.settings import settings
+            settings.refresh_from_database()
+
+            return {
+                "status": "success",
+                "message": "API key updated successfully"
+            }
+        else:
+            return {"error": "Failed to update API key in database"}, 500
+
+    except Exception as e:
+        logger.error(f"Error updating API key: {e}")
+        return {"error": f"Failed to update API key: {str(e)}"}, 500
+
+@api_router.get("/api-key/current")
+async def get_current_api_key():
+    """Get the current OpenRouter API key status (masked for security)"""
+    try:
+        from src.config.settings import get_config_value
+
+        api_key = get_config_value("openrouter_api_key")
+        if api_key:
+            # Return masked version for security
+            masked_key = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "****"
+            return {
+                "status": "configured",
+                "masked_key": masked_key,
+                "is_configured": True
+            }
+        else:
+            return {
+                "status": "not_configured",
+                "masked_key": None,
+                "is_configured": False
+            }
+
+    except Exception as e:
+        logger.error(f"Error getting current API key status: {e}")
+        return {"error": f"Failed to get API key status: {str(e)}"}, 500
+
+@api_router.post("/settings/refresh")
+async def refresh_settings():
+    """Refresh all settings from the database"""
+    try:
+        from src.config.settings import settings
+        settings.refresh_from_database()
+
+        return {
+            "status": "success",
+            "message": "Settings refreshed from database",
+            "api_key_configured": bool(settings.openrouter.api_key)
+        }
+
+    except Exception as e:
+        logger.error(f"Error refreshing settings: {e}")
+        return {"error": f"Failed to refresh settings: {str(e)}"}, 500
 
 # Health check endpoint for the API
 @api_router.get("/health")
@@ -202,11 +347,15 @@ async def api_health():
         "api_version": "1.0.0",
         "available_endpoints": [
             "/sessions - Session management",
-            "/chat - Chat completions and streaming", 
+            "/chat - Chat completions and streaming",
             "/events/emit - Real-time event emission",
             "/events/stream/{session_id} - SSE event streaming",
             "/models - Get models from database",
             "/models/refresh - Refresh models from OpenRouter",
+            "/api-key/test - Test API key validity",
+            "/api-key/update - Update API key in database",
+            "/api-key/current - Get current API key status",
+            "/settings/refresh - Refresh settings from database",
             "/health - API health check"
         ],
         "active_streams": len(active_streams),

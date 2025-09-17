@@ -392,6 +392,53 @@ async def get_models(tools_only: bool = False):
         print(f"Error getting models: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
+# API Key Management Endpoints
+@app.post("/api/api-key/test")
+async def test_api_key(request: Request):
+    """Proxy to backend API key test endpoint"""
+    try:
+        body = await request.json()
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{BACKEND_URL}/api-key/test", json=body)
+            return response.json()
+    except Exception as e:
+        print(f"Error testing API key: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/api-key/update")
+async def update_api_key(request: Request):
+    """Proxy to backend API key update endpoint"""
+    try:
+        body = await request.json()
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{BACKEND_URL}/api-key/update", json=body)
+            return response.json()
+    except Exception as e:
+        print(f"Error updating API key: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/api/api-key/current")
+async def get_current_api_key():
+    """Proxy to backend API key current status endpoint"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{BACKEND_URL}/api-key/current")
+            return response.json()
+    except Exception as e:
+        print(f"Error getting current API key: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/settings/refresh")
+async def refresh_settings():
+    """Proxy to backend settings refresh endpoint"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{BACKEND_URL}/settings/refresh")
+            return response.json()
+    except Exception as e:
+        print(f"Error refreshing settings: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
 @app.get("/health")
 async def health():
     return {"status": "healthy", "frontend": "with_backend_integration"}

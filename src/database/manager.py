@@ -646,55 +646,66 @@ class DatabaseManager:
                 try:
                     # Clear existing models
                     await db.execute("DELETE FROM models")
-                    
+
                     # Insert new models
                     for model in models:
                         await db.execute("""
-                            INSERT INTO models (id, name, is_tool_call, context_length) 
-                            VALUES (?, ?, ?, ?)
+                            INSERT INTO models (id, name, is_tool_call, context_length, is_free, pricing)
+                            VALUES (?, ?, ?, ?, ?, ?)
                         """, (
-                            model['id'], 
-                            model['name'], 
+                            model['id'],
+                            model['name'],
                             model.get('is_tool_call', False),
-                            model.get('context_length', 0)
+                            model.get('context_length', 0),
+                            model.get('is_free', 0),  # Default to 0 (paid) if not specified
+                            model.get('pricing')  # Can be None
                         ))
-                    
+
                     await db.commit()
                     logger.info(f"Saved {len(models)} models to database")
-                    
+
                 except Exception:
                     await db.rollback()
                     raise
-                    
+
         except Exception as e:
             logger.error(f"Failed to save models: {e}")
             raise
     
-    async def get_models(self, tools_only: bool = False) -> List[dict]:
-        """Get all models, optionally filtered by tool call capability"""
+    async def get_models(self, tools_only: bool = False, free_only: bool = False) -> List[dict]:
+        """Get all models, optionally filtered by tool call capability or free status"""
         try:
             async with self.get_connection() as db:
-                query = "SELECT id, name, is_tool_call, context_length FROM models"
+                query = "SELECT id, name, is_tool_call, context_length, is_free, pricing FROM models"
                 params = ()
-                
+
+                # Build WHERE clause
+                where_conditions = []
                 if tools_only:
-                    query += " WHERE is_tool_call = 1"
-                
+                    where_conditions.append("is_tool_call = 1")
+                if free_only:
+                    where_conditions.append("is_free = 1")
+
+                if where_conditions:
+                    query += " WHERE " + " AND ".join(where_conditions)
+
                 query += " ORDER BY name"
-                
+
                 cursor = await db.execute(query, params)
                 rows = await cursor.fetchall()
-                
+
                 return [
                     {
                         "id": row['id'],
-                        "name": row['name'], 
+                        "name": row['name'],
                         "is_tool_call": bool(row['is_tool_call']),
-                        "context_length": row['context_length'] or 0
+                        "context_length": row['context_length'] or 0,
+                        "is_free": bool(row['is_free']),
+                        "pricing": row['pricing']  # Can be None
                     }
                     for row in rows
                 ]
-                
+
         except Exception as e:
             logger.error(f"Failed to get models: {e}")
             raise
@@ -893,18 +904,35 @@ class DatabaseManager:
             success = await session_state_manager.update_session_configuration(session_id, config)
             if not success:
                 return False
-            
+
             # Get updated state and save to database
             updated_state = await session_state_manager.get_session_state(session_id)
             if updated_state:
                 await self.update_session_tool_state(session_id, updated_state)
                 logger.info(f"Updated session tool configuration for {session_id}")
                 return True
-            
+
             return False
-            
+
         except Exception as e:
             logger.error(f"Failed to update session tool configuration: {e}")
+            return False
+
+    async def update_config_value(self, key: str, value: str) -> bool:
+        """Update a configuration value in the config table"""
+        try:
+            async with self.get_connection() as db:
+                await db.execute("""
+                    INSERT OR REPLACE INTO config (key, value, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                """, (key, value))
+                await db.commit()
+
+            logger.info(f"Updated config value for key: {key}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to update config value for key {key}: {e}")
             return False
 
 # Global instance

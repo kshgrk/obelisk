@@ -2,12 +2,30 @@
 Configuration settings for Obelisk Temporal Integration
 """
 import os
+import sqlite3
 from typing import Optional
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+
+def get_config_value(key: str, db_path: str = "chat_sessions.db") -> str:
+    """Get a configuration value from the config table in the database"""
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM config WHERE key = ?", (key,))
+        result = cursor.fetchone()
+        conn.close()
+
+        if result:
+            return result[0]
+        return ""
+    except Exception as e:
+        print(f"Error reading config from database: {e}")
+        return ""
 
 
 class DatabaseSettings(BaseModel):
@@ -95,7 +113,7 @@ class Settings(BaseModel):
                 "max_overflow": int(os.getenv("DATABASE_MAX_OVERFLOW", "10")),
             },
             "openrouter": {
-                "api_key": os.getenv("OPENROUTER_KEY", ""),
+                "api_key": get_config_value("openrouter_api_key"),
                 "base_url": os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
                 "model": os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324:free"),
                 "temperature": float(os.getenv("OPENROUTER_TEMPERATURE", "0.7")),
@@ -147,6 +165,24 @@ class Settings(BaseModel):
     def mistral_api_key(self) -> str:
         """Get Mistral API key"""
         return self.mistral.api_key
+    
+    def refresh_openrouter_api_key(self) -> str:
+        """Refresh OpenRouter API key from database and return the current value"""
+        new_key = get_config_value("openrouter_api_key")
+        self.openrouter.api_key = new_key
+        return new_key
+
+    def refresh_from_database(self):
+        """Refresh all configuration values from the database"""
+        # Refresh OpenRouter settings
+        self.openrouter.api_key = get_config_value("openrouter_api_key")
+        self.openrouter.base_url = get_config_value("openrouter_base_url") or "https://openrouter.ai/api/v1"
+        self.openrouter.model = get_config_value("openrouter_model") or "deepseek/deepseek-chat-v3-0324:free"
+        self.openrouter.temperature = float(get_config_value("openrouter_temperature") or "0.7")
+        self.openrouter.max_tokens = int(get_config_value("openrouter_max_tokens") or "1000")
+        self.openrouter.timeout = int(get_config_value("openrouter_timeout") or "60")
+
+        print(f"Settings refreshed from database - API key: {'configured' if self.openrouter.api_key else 'not configured'}")
 
 
 # Global settings instance

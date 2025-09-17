@@ -1080,6 +1080,93 @@ body {
     line-height: 1.4;
 }
 
+.config-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    justify-content: flex-end;
+    margin-top: var(--spacing-md);
+}
+
+/* API Key Management Styles */
+.api-key-input-group {
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: stretch;
+}
+
+.api-key-input-group .config-input {
+    flex: 1;
+    margin-bottom: 0;
+}
+
+.api-key-btn {
+    padding: var(--spacing-sm) var(--spacing-md);
+    white-space: nowrap;
+    min-height: 40px;
+}
+
+.api-key-status {
+    margin-top: var(--spacing-sm);
+}
+
+.status-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    font-size: 0.75rem;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-radius: 4px;
+    font-weight: 500;
+}
+
+.status-indicator svg {
+    flex-shrink: 0;
+}
+
+/* Status variants */
+.status-configured {
+    background: rgba(5, 150, 105, 0.1);
+    color: var(--color-success);
+    border: 1px solid rgba(5, 150, 105, 0.2);
+}
+
+.status-not-configured {
+    background: rgba(217, 119, 6, 0.1);
+    color: var(--color-warning);
+    border: 1px solid rgba(217, 119, 6, 0.2);
+}
+
+.status-testing {
+    background: rgba(30, 64, 175, 0.1);
+    color: var(--color-primary);
+    border: 1px solid rgba(30, 64, 175, 0.2);
+}
+
+.status-valid {
+    background: rgba(5, 150, 105, 0.1);
+    color: var(--color-success);
+    border: 1px solid rgba(5, 150, 105, 0.2);
+}
+
+.status-invalid {
+    background: rgba(220, 38, 38, 0.1);
+    color: var(--color-error);
+    border: 1px solid rgba(220, 38, 38, 0.2);
+}
+
+.status-error {
+    background: rgba(220, 38, 38, 0.1);
+    color: var(--color-error);
+    border: 1px solid rgba(220, 38, 38, 0.2);
+}
+
+.status-testing {
+    background: rgba(30, 64, 175, 0.1);
+    color: var(--color-primary);
+    border: 1px solid rgba(30, 64, 175, 0.2);
+}
+
+
 .config-preview {
     background: var(--bg-secondary);
     border: 1px solid var(--color-gray-200);
@@ -1226,6 +1313,11 @@ body {
 
 .tool-icon {
     color: var(--color-primary);
+    flex-shrink: 0;
+}
+
+.free-icon {
+    color: var(--color-success);
     flex-shrink: 0;
 }
 

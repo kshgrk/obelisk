@@ -43,8 +43,11 @@ class OpenRouterActivities:
         Enhanced with tool calling support
         """
         start_time = time.time()
-        
+
         try:
+            # Refresh settings to ensure we have the latest API key
+            settings.refresh_from_database()
+
             # Prepare request
             headers = {
                 "Authorization": f"Bearer {settings.openrouter.api_key}",
@@ -156,12 +159,15 @@ class OpenRouterActivities:
         """
         start_time = time.time()
         session_id = request_data.get("session_id", "unknown")
-        
+
         try:
+            # Refresh settings to ensure we have the latest API key
+            settings.refresh_from_database()
+
             # Import event emission functionality
             import requests
             import uuid
-            
+
             # Prepare request for streaming
             headers = {
                 "Authorization": f"Bearer {settings.openrouter.api_key}",
@@ -743,6 +749,9 @@ class OpenRouterActivities:
         Get available models from OpenRouter API
         """
         try:
+            # Refresh settings to ensure we have the latest API key
+            settings.refresh_from_database()
+
             headers = {
                 "Authorization": f"Bearer {settings.openrouter.api_key}",
                 "Content-Type": "application/json",
