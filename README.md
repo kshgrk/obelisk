@@ -2,6 +2,10 @@
 
 > A modern, real-time chat application powered by Temporal workflows and OpenRouter's free AI models. Because why pay for AI when you can get it for free?
 
+https://github.com/user-attachments/assets/f764d1b3-99bd-4ea4-a3f0-1284ecdfc1d9
+
+
+
 ## What is Obelisk?
 
 Obelisk is a sophisticated chat application that combines the power of **Temporal workflows** with **OpenRouter's extensive collection of free AI models**. It features real-time streaming responses, dynamic tool calling, and model-agnostic sessions that let you switch between AI models mid-conversation.
