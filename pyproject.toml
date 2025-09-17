@@ -8,6 +8,8 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "httpx",
+    "aiohttp",
+    "requests",  # For health checks in start script
     "pydantic",
     "rich",
     "click",
